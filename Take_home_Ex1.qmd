@@ -267,10 +267,6 @@ map_honeycomb = tm_shape(honeycomb_count) +
 map_honeycomb
 ```
 
-## **Deriving Contiguity Spatial Weights**
-
-### **Identifying contiguity neighbours: Queen's method**
-
 ```{r}
 tmap_mode("view")
 tmap_options(check.and.fix = TRUE)
