@@ -13,6 +13,10 @@ website:
             href: Hands_on_Ex2.html
           - text: Hands-on Exercise 3
             href: Hands-on-Ex3.html
+      - text: Take-home Exercise
+        menu: 
+          - text: Take-home Exercise 1
+            href: Take_home_Ex1.html
     right:
       - href: index.qmd
         text: Home

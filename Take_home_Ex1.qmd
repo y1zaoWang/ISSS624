@@ -1,0 +1,287 @@
+---
+title: "Take-Home-Exercise 1: Geospatial Analytics for Public Good"
+author: "WYZ"
+---
+
+apply appropriate Local Indicators of Spatial Association (GLISA) and Emerging Hot Spot Analysis (EHSA) to undercover the spatial and spatio-temporal mobility patterns of public bus passengers in Singapore.
+
+# Overview
+
+## Introduction
+
+The project's background focuses on leveraging digital data from urban infrastructures, such as public transport and utilities, to understand and analyze human movement patterns in cities. With the increasing use of technologies like GPS and RFID in vehicles, and data collection through smart cards, a vast amount of movement data is available. This data is rich in patterns and structures that can illuminate human behaviors and contribute to more effective urban management and transport services. However, a significant challenge lies in the underutilization of this data. Current practices often limit its use to basic tracking and mapping in Geographic Information Systems (GIS) due to the limited capabilities of these systems in handling complex spatial and spatio-temporal data analysis.
+
+## Libraries
+
+-   [`sf`](https://cloud.r-project.org/web/packages/sf/) - Support for simple features, a standardized way to encode spatial vector data. Binds to 'GDAL' for reading and writing data, to 'GEOS' for geometrical operations, and to 'PROJ' for projection conversions and datum transformations. Uses by default the 's2' package for spherical geometry operations on ellipsoidal (long/lat) coordinates.
+
+<!-- -->
+
+-   [`tidyverse`](https://www.tidyverse.org/packages/) - Loading the core tidyverse packages which will be used for data wrangling and visualisation.
+
+-   [`tmap`](https://cran.r-project.org/web/packages/tmap/) - Thematic maps are geographical maps in which spatial data distributions are visualized. This package offers a flexible, layer-based, and easy to use approach to create thematic maps, such as choropleths and bubble maps.
+
+-   [sfdep](https://cran.r-project.org/web/packages/sfdep/index.html) - An interface to 'spdep' to integrate with 'sf' objects and the 'tidyverse'.
+
+-   [knitr](https://www.r-project.org/nosvn/pandoc/knitr.html) - The R package **knitr** is a general-purpose literate programming engine, with lightweight API's designed to give users full control of the output without heavy coding work. It combines many features into one package with slight tweaks motivated from my everyday use of Sweave.
+
+```{r}
+pacman::p_load(sf, sfdep, tmap, tidyverse, knitr, DT)
+```
+
+# **Data Preparation**
+
+### **Apstial data**
+
+For the purpose of this take-home exercise, *Passenger Volume by Origin Destination Bus Stops* downloaded from [LTA DataMall](https://datamall.lta.gov.sg/content/datamall/en.html) will be used.
+
+### **Geospatial data**
+
+Two geospatial data will be used in this study, they are:
+
+-   *Bus Stop Location* from LTA DataMall. It provides information about all the bus stops currently being serviced by buses, including the bus stop code (identifier) and location coordinates.
+
+-   *hexagon*, a [hexagon](https://desktop.arcgis.com/en/arcmap/latest/tools/spatial-statistics-toolbox/h-whyhexagons.htm) layer of 250m (this distance is the perpendicular distance between the centre of the hexagon and its edges.) should be used to replace the relative coarse and irregular Master Plan 2019 Planning Sub-zone GIS data set of URA.
+
+### **Importing of data**
+
+```{r}
+bs <- read_csv("Take-home Exercise 1/data/aspatial/origin_destination_bus_202310.csv")
+```
+
+Let use display the bs tibble data table by using the code chunk below.
+
+```{r}
+glimpse(bs)
+```
+
+A quick check of odbus tibble data frame shows that the values in OROGIN_PT_CODE and DESTINATON_PT_CODE are in numeric data type. Hence, the code chunk below is used to convert these data values into character data type.
+
+```{r}
+bs$ORIGIN_PT_CODE <- as.factor(bs$ORIGIN_PT_CODE)
+bs$DESTINATION_PT_CODE <- as.factor(bs$DESTINATION_PT_CODE) 
+```
+
+### **Extracting the study data**
+
+For the purpose of this exercise, we will extract commuting flows on weekday and between 6 and 9 o'clock.
+
+```{r}
+# Weekday morning peak (6 AM to 9 AM)
+odbus6_9 <- bs %>%
+  filter(DAY_TYPE == "WEEKDAY") %>%
+  filter(TIME_PER_HOUR >= 6 & TIME_PER_HOUR <= 9) %>%
+  group_by(ORIGIN_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS))
+
+# Weekday afternoon peak (5 PM to 8 PM)
+odbus17_20 <- bs %>%
+  filter(DAY_TYPE == "WEEKDAY") %>%
+  filter(TIME_PER_HOUR >= 17 & TIME_PER_HOUR <= 20) %>%
+  group_by(ORIGIN_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS))
+
+# Weekend/holiday morning peak (11 AM to 2 PM)
+odbus11_14 <- bs %>%
+  filter(DAY_TYPE == "WEEKEND_OR_HOLIDAY") %>%
+  filter(TIME_PER_HOUR >= 11 & TIME_PER_HOUR <= 14) %>%
+  group_by(ORIGIN_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS))
+
+# Weekend/holiday evening peak (4 PM to 7 PM)
+odbus16_19 <- bs %>%
+  filter(DAY_TYPE == "WEEKEND_OR_HOLIDAY") %>%
+  filter(TIME_PER_HOUR >= 16 & TIME_PER_HOUR <= 19) %>%
+  group_by(ORIGIN_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS))
+```
+
+Table below shows the content of bs6_9
+
+```{r}
+datatable(odbus6_9)
+datatable(odbus17_20)
+datatable(odbus11_14)
+datatable(odbus16_19)
+```
+
+We will save the output in rds format for future used.
+
+```{r}
+write_rds(odbus6_9, "Take-home Exercise 1/data/rds/odbus6_9.rds")
+write_rds(odbus17_20, "Take-home Exercise 1/data/rds/odbus17_20.rds")
+write_rds(odbus11_14, "Take-home Exercise 1/data/rds/odbus11_14.rds")
+write_rds(odbus16_19, "Take-home Exercise 1/data/rds/odbus16_19.rds")
+```
+
+The code chunk below will be used to import the save bs6_9.rds into R environment.
+
+```{r}
+odbus6_9 <- read_rds("Take-home Exercise 1/data/rds/odbus6_9.rds")
+odbus17_20 <- read_rds("Take-home Exercise 1/data/rds/odbus17_20.rds")
+odbus11_14 <- read_rds("Take-home Exercise 1/data/rds/odbus11_14.rds")
+odbus16_19 <- read_rds("Take-home Exercise 1/data/rds/odbus16_19.rds")
+```
+
+## **Working with Geospatial Data**
+
+For the purpose of this exercise, two geospatial data will be used. They are:
+
+-   BusStop: This data provides the location of bus stop as at last quarter of 202310.
+
+-   Hexagon: hexagonal girds usually more visually appealing and use them in most of my mapping projects.
+
+### **Importing geospatial data**
+
+Bus stop:
+
+```{r}
+busstop <- st_read(dsn = "Take-home Exercise 1/data/geospatial",
+                   layer = "BusStop") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+glimpse(busstop)
+```
+
+Hexagon:
+
+```{r}
+
+honeycomb_busstop = st_make_grid(busstop, c(150, 150), what = "polygons", square = FALSE)
+
+honeycomb_busstop_sf = st_sf(honeycomb_busstop) %>%
+  mutate(grid_id = 1:length(lengths(honeycomb_busstop)))
+
+honeycomb_busstop_sf$n_colli = lengths(st_intersects(honeycomb_busstop_sf, busstop))
+
+honeycomb_count = filter(honeycomb_busstop_sf, n_colli > 0)
+```
+
+### **Combining both data frame by using left join**
+
+```{r}
+busstop_hxgn_grid <- st_intersection(busstop, honeycomb_count) %>%
+  select(BUS_STOP_N, grid_id) %>%
+  st_drop_geometry()
+```
+
+```{r}
+wkd6_9_hxgn_grid <- left_join(busstop_hxgn_grid,odbus6_9, by = c("BUS_STOP_N" = "ORIGIN_PT_CODE")) %>%
+  rename(ORIGIN_BS = BUS_STOP_N,
+         ORIGIN_SZ = grid_id) %>%
+  group_by(ORIGIN_BS, ORIGIN_SZ) %>%
+  summarise(TOT_TRIPS = sum(TRIPS))
+
+wkd17_20_hxgn_grid <- left_join(busstop_hxgn_grid,odbus17_20, by = c("BUS_STOP_N" = "ORIGIN_PT_CODE")) %>%
+  rename(ORIGIN_BS = BUS_STOP_N,
+         ORIGIN_SZ = grid_id) %>%
+  group_by(ORIGIN_BS, ORIGIN_SZ) %>%
+  summarise(TOT_TRIPS = sum(TRIPS))
+
+wkd16_19_hxgn_grid <- left_join(busstop_hxgn_grid,odbus16_19, by = c("BUS_STOP_N" = "ORIGIN_PT_CODE")) %>%
+  rename(ORIGIN_BS = BUS_STOP_N,
+         ORIGIN_SZ = grid_id) %>%
+  group_by(ORIGIN_BS, ORIGIN_SZ) %>%
+  summarise(TOT_TRIPS = sum(TRIPS))
+
+wkd11_14_hxgn_grid <- left_join(busstop_hxgn_grid,odbus11_14, by = c("BUS_STOP_N" = "ORIGIN_PT_CODE")) %>%
+  rename(ORIGIN_BS = BUS_STOP_N,
+         ORIGIN_SZ = grid_id) %>%
+  group_by(ORIGIN_BS, ORIGIN_SZ) %>%
+  summarise(TOT_TRIPS = sum(TRIPS))
+```
+
+```{r}
+glimpse(wkd6_9_hxgn_grid)
+```
+
+check for duplicating records.
+
+```{r}
+duplicate <- wkd6_9_hxgn_grid %>%
+  group_by_all() %>%
+  filter(n()>1) %>%
+  ungroup()
+
+origin_data <- unique(wkd6_9_hxgn_grid)
+
+origintrip_bs <- left_join(busstop, 
+                           wkd6_9_hxgn_grid,
+                           by = c("BUS_STOP_N" = "ORIGIN_BS"))
+```
+
+### **Plotting a choropleth map**
+
+```{r}
+tm_shape(origintrip_bs)+
+  tm_fill("TOT_TRIPS", 
+          style = "quantile", 
+          palette = "Blues",
+          title = "Passenger trips") +
+  tm_layout(main.title = "Passenger trips generated at planning sub-zone level",
+            main.title.position = "center",
+            main.title.size = 1.2,
+            legend.height = 0.45, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_borders(alpha = 0.5) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha =0.2) +
+  tm_credits("Source: Planning Sub-zone boundary from URA\n and Passenger trips data from LTA", 
+             position = c("left", "bottom"))
+```
+
+```{r}
+tmap_mode("view")
+
+map_honeycomb = tm_shape(honeycomb_count) +
+  tm_fill(
+    col = "n_colli",
+    palette = "Reds",
+    style = "cont",
+    title = "Number of collisions",
+    id = "grid_id",
+    showNA = FALSE,
+    alpha = 0.6,
+    popup.vars = c(
+      "Number of collisions: " = "n_colli"
+    ),
+    popup.format = list(
+      n_colli = list(format = "f", digits = 0)
+    )
+  ) +
+  tm_borders(col = "grey40", lwd = 0.7)
+
+map_honeycomb
+```
+
+## **Deriving Contiguity Spatial Weights**
+
+### **Identifying contiguity neighbours: Queen's method**
+
+```{r}
+tmap_mode("view")
+tmap_options(check.and.fix = TRUE)
+tm_shape(wkd6_9_hxgn_grid)+
+  tm_fill("TOT_TRIPS", 
+          style = "quantile", 
+          palette = "Blues",
+          title = "Passenger trips") +
+  tm_layout(main.title = "Passenger trips generated at planning sub-zone level",
+            main.title.position = "center",
+            main.title.size = 1.2,
+            legend.height = 0.45, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_borders(alpha = 0.5) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar() +
+  tm_grid(alpha =0.2) +
+  tm_credits("Source: Planning Sub-zone boundary from URA\n and Passenger trips data from LTA", 
+             position = c("left", "bottom"))
+```
+
+## 

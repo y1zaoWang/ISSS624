@@ -92,7 +92,7 @@ The code chunk below will be used to import the save odbus6_9.rds into R environ
 odbus6_9 <- read_rds("Hands_on_Ex3/data/rds/odbus6_9.rds")
 ```
 
-##  **Working with Geospatial Data**
+## **Working with Geospatial Data**
 
 For the purpose of this exercise, two geospatial data will be used. They are:
 
