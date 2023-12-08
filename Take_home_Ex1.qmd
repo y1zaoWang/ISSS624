@@ -96,6 +96,10 @@ odbus16_19 <- bs %>%
   summarise(TRIPS = sum(TOTAL_TRIPS))
 ```
 
+```{r}
+kable(head(odbus6_9))
+```
+
 Table below shows the content of bs6_9
 
 ```{r}
@@ -161,11 +165,21 @@ honeycomb_count = filter(honeycomb_busstop_sf, n_colli > 0)
 
 ### **Combining both data frame by using left join**
 
+As mentioned we want to visualise the spatial patterns on the map of Singapore, this will require us to join the two existing dataframes in order to have a complete data framework.
+
+We will join the two dataframes using \"BusStop\" in *BUS_STOP_N* and \"Hexagon\" in *grid_id*, both referring to the code of the city.
+
 ```{r}
 busstop_hxgn_grid <- st_intersection(busstop, honeycomb_count) %>%
   select(BUS_STOP_N, grid_id) %>%
   st_drop_geometry()
 ```
+
+-   `st_intersection()` is used to perform point and polygon overly and the output will be in point sf object.
+
+-   `select()` of dplyr package is then use to retain only BUS_STOP_N and grid_id in the sf data frame.
+
+-   five bus stops are excluded in the resultant data frame because they are outside of Singapore bpundary.
 
 ```{r}
 wkd6_9_hxgn_grid <- left_join(busstop_hxgn_grid,odbus6_9, by = c("BUS_STOP_N" = "ORIGIN_PT_CODE")) %>%
@@ -216,6 +230,8 @@ glimpse(origintrip_bs)
 
 ### **Plotting a choropleth map**
 
+Using the steps you had learned, prepare a choropleth map showing the distribution of passenger trips at planning sub-zone level.
+
 ```{r}
 tmap_mode("view")
 tm_shape(origintrip_bs) +
@@ -243,6 +259,8 @@ tm_shape(origintrip_bs) +
 
 ```
 
+Clusters of darker blue dots, especially those representing the highest quantile of 7,592 to 357,043 trips, are likely found in commercial or central business districts and around major transportation nodes such as train stations or bus interchanges. The spread and concentration of these clusters can reveal urban density, the layout of transportation infrastructure, and possibly even socioeconomic activity levels.
+
 ```{r}
 tmap_mode("view")
 
@@ -267,6 +285,8 @@ map_honeycomb = tm_shape(honeycomb_count) +
 map_honeycomb
 ```
 
+The distribution of collisions appears to be somewhat scattered, with no clear pattern of concentration in any particular area. This could imply that the risk of collisions is widespread across the region rather than being localized to specific zones. However, there may be subtle clusters of higher collision frequencies that are not immediately visible due to the scale or the granularity of the data represented.
+
 ```{r}
 tmap_mode("view")
 tmap_options(check.and.fix = TRUE)
@@ -290,4 +310,18 @@ tm_shape(origintrip_bs) +
 
 ```
 
-## 
+## **Local Indicators of Spatial Association (LISA) Analysis**
+
+-   Compute LISA of the passengers trips generate by origin at hexagon level.
+
+-   Display the LISA maps of the passengers trips generate by origin at hexagon level. The maps should only display the significant (i.e. p-value \< 0.05)
+
+### **Deriving contiguity weights: Queen\'s method**
+
+```{r}
+wm_q <- wkd6_9_hxgn_grid %>%
+  mutate(nb = st_contiguity(geometry),
+         wt = st_weights(nb,
+                         style = "W"),
+         .before = 1) 
+```
