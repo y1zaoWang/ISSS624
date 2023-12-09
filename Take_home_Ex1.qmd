@@ -167,7 +167,7 @@ honeycomb_count = filter(honeycomb_busstop_sf, n_colli > 0)
 
 As mentioned we want to visualise the spatial patterns on the map of Singapore, this will require us to join the two existing dataframes in order to have a complete data framework.
 
-We will join the two dataframes using \"BusStop\" in *BUS_STOP_N* and \"Hexagon\" in *grid_id*, both referring to the code of the city.
+We will join the two dataframes using "BusStop" in *BUS_STOP_N* and "Hexagon" in *grid_id*, both referring to the code of the city.
 
 ```{r}
 busstop_hxgn_grid <- st_intersection(busstop, honeycomb_count) %>%
@@ -209,6 +209,7 @@ wkd11_14_hxgn_grid <- left_join(busstop_hxgn_grid,odbus11_14, by = c("BUS_STOP_N
 
 ```{r}
 glimpse(wkd6_9_hxgn_grid)
+head(wkd6_9_hxgn_grid)
 ```
 
 check for duplicating records.
@@ -221,11 +222,13 @@ duplicate <- wkd6_9_hxgn_grid %>%
 
 origin_data <- unique(wkd6_9_hxgn_grid)
 
-origintrip_bs <- left_join(busstop, 
+origintrip_bs <- left_join(honeycomb_count, 
                            wkd6_9_hxgn_grid,
-                           by = c("BUS_STOP_N" = "ORIGIN_BS"))
+                           by = c("grid_id" = "ORIGIN_SZ")) %>%
+  rename(geometry = "honeycomb_busstop")
 
 glimpse(origintrip_bs)
+head(origintrip_bs)
 ```
 
 ### **Plotting a choropleth map**
@@ -316,4 +319,12 @@ tm_shape(origintrip_bs) +
 
 -   Display the LISA maps of the passengers trips generate by origin at hexagon level. The maps should only display the significant (i.e. p-value \< 0.05)
 
-### **Deriving contiguity weights: Queen\'s method**
+### **Deriving contiguity weights: Queen's method**
+
+```{r}
+wm_q <- origintrip_bs %>%
+  mutate(nb = st_contiguity(geometry),
+         wt = st_weights(nb,
+                         style = "W"),
+         .before = 1) 
+```
