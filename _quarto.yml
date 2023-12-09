@@ -13,6 +13,10 @@ website:
             href: Hands_on_Ex2.html
           - text: Hands-on Exercise 3
             href: Hands-on-Ex3.html
+      - text: In-class Exercise
+        menu: 
+          - text: In-class Exercise 2
+            href: In_class_Ex2.html
       - text: Take-home Exercise
         menu: 
           - text: Take-home Exercise 1

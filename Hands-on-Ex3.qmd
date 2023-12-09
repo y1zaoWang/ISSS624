@@ -21,7 +21,7 @@ In this hands-on exercise, you will learn how to build an OD matrix by using *Pa
 
 -   to visualise passenger volume by origin and destination bus stops by using the desire lines data.
 
-## **15.2 Getting Started**
+## **Getting Started**
 
 For the purpose of this exercise, four r packages will be used. They are:
 
