@@ -17,6 +17,10 @@ website:
         menu: 
           - text: In-class Exercise 2
             href: In_class_Ex2.html
+          - text: In-class Exercise 2:GLSA
+            href: In_class_Ex2_GLSA.html
+          - text: In-class Exercise 2:EHSA
+            href: In_class_Ex2_EHSA.html
       - text: Take-home Exercise
         menu: 
           - text: Take-home Exercise 1

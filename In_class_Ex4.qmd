@@ -1,0 +1,14 @@
+---
+title: "In-class Exercise 4"
+author: "WYZ"
+---
+
+## Overview
+
+## Getting Started
+
+```{r}
+pacman::p_load(tidyverse, sf, httr, tmap)
+```
+
+## Geocoding using SLA API
