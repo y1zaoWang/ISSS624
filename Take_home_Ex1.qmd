@@ -317,11 +317,3 @@ tm_shape(origintrip_bs) +
 -   Display the LISA maps of the passengers trips generate by origin at hexagon level. The maps should only display the significant (i.e. p-value \< 0.05)
 
 ### **Deriving contiguity weights: Queen\'s method**
-
-```{r}
-wm_q <- wkd6_9_hxgn_grid %>%
-  mutate(nb = st_contiguity(geometry),
-         wt = st_weights(nb,
-                         style = "W"),
-         .before = 1) 
-```
