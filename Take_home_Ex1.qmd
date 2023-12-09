@@ -321,10 +321,5 @@ tm_shape(origintrip_bs) +
 
 ### **Deriving contiguity weights: Queen's method**
 
-```{r}
-wm_q <- origintrip_bs %>%
-  mutate(nb = st_contiguity(geometry),
-         wt = st_weights(nb,
-                         style = "W"),
-         .before = 1) 
+```{}
 ```
