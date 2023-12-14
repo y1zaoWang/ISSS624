@@ -1,4 +1,203 @@
 ---
-title: "Take_home_Ex2"
+title: "Take-home Exercise 2"
 author: "WYZ"
 ---
+
+# **Applied Spatial Interaction Models: A case study of Singapore public bus commuter flows**
+
+## **1 Background**
+
+The scenario highlights the challenges in urban mobility, specifically understanding commuting patterns and the impact of public transportation changes. Traditional methods like commuter surveys are outdated and inefficient. The focus shifts to leveraging digital infrastructure data, such as GPS and SMART card usage, for more dynamic and insightful analysis.The exercise is motivated by two factors: the underutilization of available open data for policy making and the need for practical research in geospatial data science and analysis (GDSA). The task involves using GDSA to integrate diverse data sources, building spatial interaction models to understand public bus transit patterns. This approach aims to provide more effective tools for urban planning and decision-making.
+
+## **2 The Data**
+
+### **Open Government Data**
+
+For the purpose of this assignment, data from several open government sources will be used:
+
+-   *Passenger Volume by Origin Destination Bus Stops*, *Bus Stop Location*, *Train Station* and *Train Station Exit Point*, just to name a few of them, from [LTA DataMall](https://datamall.lta.gov.sg/content/datamall/en.html).
+
+-   *Master Plan 2019 Subzone Boundary*, *HDB Property Information*, *School Directory and Information* and other relevant data from [Data.gov.sg](https://beta.data.gov.sg/).
+
+-   *hexagon*, a [hexagon](https://desktop.arcgis.com/en/arcmap/latest/tools/spatial-statistics-toolbox/h-whyhexagons.htm) layer of 250m (this distance is the perpendicular distance between the centre of the hexagon and its edges.) should be used to replace the relative coarse and irregular Master Plan 2019 Planning Sub-zone GIS data set of URA.
+
+## **3 Getting Started**
+
+```{r}
+pacman::p_load(tmap, sf, DT, stplanr, sp,
+               performance,reshape2,httr,
+               ggpubr, tidyverse, corrplot)
+```
+
+## **4 Data Preparation**
+
+### **4.1 Importing the OD data**
+
+Firstly, we will import the *Passenger Volume by Origin Destination Bus Stops* data set downloaded from LTA DataMall by using `read_csv()` of **readr** package.
+
+```{r}
+odbus <- read_csv("Take-home Exercise 2/data/aspatial/origin_destination_bus_202310.csv")
+```
+
+```{r}
+glimpse(odbus)
+```
+
+Let's do a quick check of odbus tibble data frame shows that the values in OROGIN_PT_CODE and DESTINATON_PT_CODE are in numeric data type.
+
+```{r}
+odbus$ORIGIN_PT_CODE <- as.factor(odbus$ORIGIN_PT_CODE)
+odbus$DESTINATION_PT_CODE <- as.factor(odbus$DESTINATION_PT_CODE) 
+```
+
+For this take home exercise, we will extract commuting flows on weekday and between 6 and 9 o'clock.
+
+```{r}
+odbus6_9 <- odbus %>%
+  filter(DAY_TYPE == "WEEKDAY") %>%
+  filter(TIME_PER_HOUR >= 6 &
+           TIME_PER_HOUR <= 9) %>%
+  group_by(ORIGIN_PT_CODE,
+           DESTINATION_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS))
+```
+
+Save the output in rds format for future used.
+
+```{r}
+write_rds(odbus6_9, "Take-home Exercise 2/data/rds/odbus6_9.rds")
+odbus6_9 <- read_rds("Take-home Exercise 2/data/rds/odbus6_9.rds")
+```
+
+### **4.2 Importing Geospatial data into R**
+
+For the purpose of this exercise, three geospatial data will be used first. They are:
+
+-   BusStop: This data provides the location of bus stop as at last quarter of 2023.
+
+-   MPSZ-2019: This data provides the sub-zone boundary of URA Master Plan 2019.
+
+-   Hexagon: analytical hexagon data of 375m (this distance is the perpendicular distance between the centre of the hexagon and its edges) to represent the [traffic analysis zone (TAZ)](https://tmg.utoronto.ca/files/Reports/Traffic-Zone-Guidance_March-2021_Final.pdf).
+
+```{r}
+busstop <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "BusStop") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+mpsz <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "MPSZ-2019") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+mpsz
+```
+
+```{r}
+mpsz <- write_rds(mpsz, "Take-home Exercise 2/data/rds/mpsz.rds")
+```
+
+### 4.3 Creating Hexagon grid
+
+```{r}
+area_honeycomb_grid = st_make_grid(busstop,cellsize = 750, what = "polygons", square = FALSE)
+
+honeycomb_grid_sf = st_sf(area_honeycomb_grid) %>%
+
+mutate(grid_id = 1:length(lengths(area_honeycomb_grid)))
+```
+
+```{r}
+st_write(honeycomb_grid_sf, "Take-home Exercise 2/data/geospatial/hexagon.shp",append=TRUE)
+hexagon <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "hexagon") %>%
+  st_transform(crs = 3414)
+```
+
+## **5 Geospatial data wrangling**
+
+### **5.1 Combining Busstop and Hexagon**
+
+```{r}
+honeycomb_grid <- st_intersection(busstop, hexagon) %>%
+  select(BUS_STOP_N, grid_id) %>%
+  st_drop_geometry()
+```
+
+```{r}
+write_rds(honeycomb_grid, "Take-home Exercise 2/data/rds/hexagon_busstop.rds")
+```
+
+### **5.2 Combine Busstop and mpsz**
+
+Next, we are going to combine the datset mpsz and hexagon.
+
+```{r}
+busstop_mpsz <- st_intersection(busstop, mpsz) %>%
+  select(BUS_STOP_N, SUBZONE_C) 
+```
+
+### **5.3 Combining Hexagon and busstop_mpsz**
+
+```{r}
+hexagon_bsmpsz <- st_join(busstop_mpsz , hexagon,
+            by = c("geometry" = "geometry")) 
+```
+
+### **5.4 Combine odbus6_9 with od_data**
+
+Combine the Hexagon and busstop_mpsz with the odbus6_9 data to give me the unique identifier of the origin:
+
+```{r}
+bm6_9 <- left_join(odbus6_9 , hexagon_bsmpsz,
+            by = c("ORIGIN_PT_CODE" = "BUS_STOP_N")) %>%
+  rename(ORIGIN_BS = ORIGIN_PT_CODE,
+         ORIGIN_SZ = SUBZONE_C,
+         DESTIN_BS = DESTINATION_PT_CODE)
+```
+
+Now, we check the duplicate. If duplicated records exist, the code chunk below will be used to retain the unique records.
+
+```{r}
+duplicate <- bm6_9 %>%
+  group_by_all() %>%
+  filter(n()>1) %>%
+  ungroup()
+
+bm6_9 <- unique(bm6_9)
+```
+
+It will be a good practice to confirm if the duplicating records issue has been addressed fully.
+
+Next, we will update od_data data frame with Combine Hexagon and Busstop_Mpsz with destination:
+
+```{r}
+bm6_9_1 <- left_join(bm6_9 , hexagon_bsmpsz,
+            by = c("DESTIN_BS" = "BUS_STOP_N")) 
+```
+
+Before continue, it is a good practice for us to check for duplicating records once again.
+
+```{r}
+duplicate <- bm6_9_1 %>%
+  group_by_all() %>%
+  filter(n()>1) %>%
+  ungroup()
+```
+
+```{r}
+bm6_9_1 <- unique(bm6_9_1)
+bm6_9_1 <- bm6_9_1 %>%
+  drop_na() %>%
+  group_by(geometry.x, geometry.y) %>%
+  summarise(MORNING_PEAK = sum(TRIPS))
+```
+
+Save the output on rds for the rest of the project.
+
+```{r}
+write_rds(bm6_9_1, "Take-home Exercise 2/data/rds/bm6_9_1.rds")
+bm6_9_1 <- read_rds("Take-home Exercise 2/data/rds/bm6_9_1.rds")
+```

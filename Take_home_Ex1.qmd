@@ -321,5 +321,5 @@ tm_shape(origintrip_bs) +
 
 ### **Deriving contiguity weights: Queen's method**
 
-```{}
+```         
 ```

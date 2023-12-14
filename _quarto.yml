@@ -29,6 +29,8 @@ website:
         menu: 
           - text: Take-home Exercise 1
             href: Take_home_Ex1.html
+          - text: Take-home Exercise 2
+            href: Take_home_Ex2.html
     right:
       - href: index.qmd
         text: Home
