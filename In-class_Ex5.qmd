@@ -1,0 +1,161 @@
+---
+title: "In-class Exercise 5"
+---
+
+## **Overview**
+
+Spatial Interaction Models have often used to explain origin-destination (OD) flows that arise in fields such as public bus commuting. These models rely on a function of the distance between the origin and destination as well as explanatory variables pertaining to characteristics of both origin and destination locations. Spatial interaction models assume that using distance as an explanatory variable will eradicate the spatial dependence among the sample of OD flows between pairs of locations. The notion that use of distance functions in conventional spatial interaction models effectively captures spatial dependence in interregional flows has long been challenged. In view of the limitation Spatial Interaction Models to account for spatial dependence, Spatial Econometric Interaction Models have been introduce James P. LeSage and R. Kelley Pace (2009).
+
+In this in-class exercise, you will gain hands-on exercise on using spflow package, a R library specially developed for calibrating Spatial Econometric Interaction Models. By the end of this in-class exercise, you will acquire the skills to:
+
+-   extract explanatory variables from secondary source,
+
+-   assemble and derive explanatory variables from publicly available geospatial data,
+
+-   integrate these explanatory variable into a tidy variables tibble data.frame.
+
+-   calibrate Spatial Econometric Interaction Models by using spflow.
+
+## **Getting Started**
+
+In this exercise, the development version (0.1.0.9010) of **spflow** will be used instead of the released version (0.1.0). The code chunk below will be used to install the development version of **spflow** package.
+
+```{r}
+devtools::install_github("LukeCe/spflow")
+```
+
+Next, will will load spflow and other R packages into R environment.
+
+```{r}
+pacman::p_load(tmap, sf, spdep, sp, Matrix,
+               spflow, reshape2, knitr,
+               tidyverse)
+```
+
+## **Data Preparation**
+
+Before we can calibrate Spatial Econometric Interaction Models by using **spflow** package, three data sets are required. They are:
+
+-   a spatial weights,
+
+-   a tibble data.frame consists of the origins, destination, flows and distances between the origins and destination, and
+
+-   a tibble data.frame consists of the explanatory variables.
+
+### **Building the geographical area**
+
+For the purpose of this study, URA Master Planning 2019 Planning Subzone GIS data will be used.
+
+In the code chunk below, *MPSZ-2019* shapefile will be import into R environment as a sf tibble data.frame called *mpsz*.
+
+```{r}
+mpsz <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                layer = "MPSZ-2019") %>%
+  st_transform(crs = 3414) 
+```
+
+Next, the code chunk below will be used to import *BusStop* shapefile into R environment as an sf object called *busstop*.
+
+```{r}
+busstop <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "BusStop") %>%
+  st_transform(crs = 3414)
+```
+
+In this study, our analysis will be focused on planning subzone with bus stop. In view of this, the code chunk below will be used to perform Point-in-Polygon count analysis.
+
+```{r}
+mpsz$`BUSSTOP_COUNT`<- lengths(
+  st_intersects(
+    mpsz, busstop))
+```
+
+Next, code chunk below will be used to select planning subzone with bus stops.
+
+```{r}
+mpsz_busstop <- mpsz %>%
+  filter(BUSSTOP_COUNT > 0)
+mpsz_busstop
+```
+
+Notice that there are 313 planning subzone in this sf object.
+
+### **Preparing the Spatial Weights**
+
+There are three different matrices that can be used to describe the connectivity between planning subzone. They are: contiguity, fixed distance and adaptive distance.
+
+Code chunk below will be used to compute the three spatial weights at one goal.
+
+```{r}
+centroids <- suppressWarnings({
+    st_point_on_surface(st_geometry(mpsz_busstop))})
+
+mpsz_nb <- list(
+  "by_contiguity" = poly2nb(mpsz_busstop),
+  "by_distance" = dnearneigh(centroids, 
+                             d1 = 0, d2 = 5000),
+  "by_knn" = knn2nb(knearneigh(centroids, 3))
+)
+```
+
+```{r}
+mpsz_nb
+```
+
+Code chunks below will be used to plot the spatial weights in `mpsz_nb`.
+
+```{r}
+plot(st_geometry(mpsz))
+plot(mpsz_nb$by_contiguity, 
+     centroids, 
+     add = T, 
+     col = rgb(0,0,0,
+               alpha=0.5))
+title("Contiguity") 
+
+plot(st_geometry(mpsz))
+plot(mpsz_nb$by_distance,
+     centroids, 
+     add = T, 
+     col = rgb(0,0,0,
+               alpha=0.5)) 
+title("Distance") 
+
+plot(st_geometry(mpsz))
+plot(mpsz_nb$by_knn, 
+     centroids, 
+     add = T, 
+     col = rgb(0,0,0,
+               alpha=0.5))
+title("3 Nearest Neighbors") 
+```
+
+When you are happy with the results, it is time to save `mpsz_nb` into an **rds** file for subsequent use by using the code chunk below.
+
+```{r}
+write_rds(mpsz_nb, "In-class_Ex5/data/rds/mpsz_nb.rds")
+```
+
+### **Preparing The Flow Data**
+
+In this section, you will learn how to prepare a flow data at the planning subzone level as shown in the screenshot below.
+
+```{r}
+odbus6_9 <- read_rds("Take-home Exercise 2/data/rds/odbus6_9.rds")
+```
+
+```{r}
+busstop_mpsz <- st_intersection(busstop, mpsz) %>%
+  select(BUS_STOP_N, SUBZONE_C) %>%
+  st_drop_geometry()
+```
+
+Next, we are going to append the planning subzone code from busstop_mpsz data.frame onto odbus6_9 data frame.
+
+```{r}
+od_data <- left_join(odbus6_9 , busstop_mpsz,
+            by = c("ORIGIN_PT_CODE" = "BUS_STOP_N")) %>%
+  rename(ORIGIN_BS = ORIGIN_PT_CODE,
+         ORIGIN_SZ = SUBZONE_C,
+         DESTIN_BS = DESTINATION_PT_CODE)
+```

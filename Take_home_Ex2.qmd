@@ -132,6 +132,10 @@ busstop %>%
   arrange(BUS_STOP_N)
 ```
 
+```{r}
+busstop <- write_rds(busstop, "Take-home Exercise 2/data/rds/busstop.rds")
+```
+
 Import "MPSZ-2019" data
 
 ```{r}
@@ -231,6 +235,10 @@ duplicate <- od_data %>%
   ungroup()
 
 duplicate
+```
+
+```{r}
+od_data <- write_rds(od_data, "Take-home Exercise 2/data/rds/od_data.rds")
 ```
 
 Next, perform another left join to get the 'DESTIN_GRID_ID' and the 'DESTIN_LOC_DESC' into "od_data" df. The number of rows before and after the left joins are the same.
