@@ -24,9 +24,7 @@ For the purpose of this assignment, data from several open government sources wi
 ## **3 Getting Started**
 
 ```{r}
-pacman::p_load(tmap, sf, DT, stplanr, sp,
-               performance,reshape2,httr,
-               ggpubr, tidyverse, corrplot)
+pacman::p_load(sf, sp, sfdep, tmap, stplanr, tidyverse, skimr, knitr, DT, performance, reshape2, ggpubr, ggplot2, plotly, h3jsr)
 ```
 
 ## **4 Data Preparation**
@@ -50,16 +48,35 @@ odbus$ORIGIN_PT_CODE <- as.factor(odbus$ORIGIN_PT_CODE)
 odbus$DESTINATION_PT_CODE <- as.factor(odbus$DESTINATION_PT_CODE) 
 ```
 
+The function below will extract origin data based on the four time intervals required by the task. The expected arguments are
+
+1.  daytype: 'WEEKDAY' or 'WEEKENDS/HOLIDAY'
+
+2.  timeinterval: c(8,10) if we want data from 8am to 11am.
+
+The function will also compute the sum of all trips by 'ORIGIN_PT_CODE' for each time interval and stored under a new field called 'TRIPS'.
+
+```{r}
+get_origin_dest <- function(daytype, timeinterval) {
+  result <- odbus %>%
+    filter(DAY_TYPE == daytype) %>%
+    filter(TIME_PER_HOUR >= timeinterval[1] & TIME_PER_HOUR <= timeinterval[2]) %>%
+    group_by(ORIGIN_PT_CODE,
+             DESTINATION_PT_CODE) %>%
+    summarise(TRIPS = sum(TOTAL_TRIPS))
+  
+  return(result)
+}
+```
+
 For this take home exercise, we will extract commuting flows on weekday and between 6 and 9 o'clock.
 
 ```{r}
-odbus6_9 <- odbus %>%
-  filter(DAY_TYPE == "WEEKDAY") %>%
-  filter(TIME_PER_HOUR >= 6 &
-           TIME_PER_HOUR <= 9) %>%
-  group_by(ORIGIN_PT_CODE,
-           DESTINATION_PT_CODE) %>%
-  summarise(TRIPS = sum(TOTAL_TRIPS))
+odbus6_9 <- get_origin_dest('WEEKDAY', c(6, 9))
+```
+
+```{r}
+datatable(odbus6_9)
 ```
 
 Save the output in rds format for future used.
@@ -85,6 +102,38 @@ busstop <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
   st_transform(crs = 3414)
 ```
 
+Check the duplicates in "busstop"
+
+```{r}
+busstop %>% 
+  st_drop_geometry() %>% 
+  group_by(BUS_STOP_N) %>%
+  filter(n()>1) %>%
+  ungroup() %>% 
+  arrange(BUS_STOP_N)
+```
+
+Removing duplicates
+
+```{r}
+busstop <- busstop %>%
+  distinct(BUS_STOP_N,
+           .keep_all = TRUE)
+```
+
+Double check the duplicates have been removed
+
+```{r}
+busstop %>% 
+  st_drop_geometry() %>% 
+  group_by(BUS_STOP_N) %>%
+  filter(n()>1) %>%
+  ungroup() %>% 
+  arrange(BUS_STOP_N)
+```
+
+Import "MPSZ-2019" data
+
 ```{r}
 mpsz <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
                    layer = "MPSZ-2019") %>%
@@ -107,12 +156,17 @@ area_honeycomb_grid = st_make_grid(busstop,cellsize = 750, what = "polygons", sq
 honeycomb_grid_sf = st_sf(area_honeycomb_grid) %>%
 
 mutate(grid_id = 1:length(lengths(area_honeycomb_grid)))
+
+honeycomb_grid_sf$num_bs = lengths(st_intersects(honeycomb_grid_sf, busstop))
+
+
+bs_count = filter(honeycomb_grid_sf, num_bs > 0)
 ```
 
 ```{r}
-st_write(honeycomb_grid_sf, "Take-home Exercise 2/data/geospatial/hexagon.shp",append=TRUE)
-hexagon <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
-                   layer = "hexagon") %>%
+st_write(bs_count, "Take-home Exercise 2/data/geospatial/bs_count.shp",append=TRUE)
+bs_count <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "bs_count") %>%
   st_transform(crs = 3414)
 ```
 
@@ -121,83 +175,790 @@ hexagon <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
 ### **5.1 Combining Busstop and Hexagon**
 
 ```{r}
-honeycomb_grid <- st_intersection(busstop, hexagon) %>%
-  select(BUS_STOP_N, grid_id) %>%
+busstop_hex <- st_intersection(busstop, bs_count) %>% 
+  select(BUS_STOP_N, LOC_DESC,  grid_id, num_bs)
+
+busstop_hex
+```
+
+```{r}
+write_rds(busstop_hex, "Take-home Exercise 2/data/rds/busstop_hex.rds")
+```
+
+Drop geometry column.
+
+```{r}
+busstop_hex_geo <- busstop_hex
+busstop_hex <- busstop_hex  %>% 
   st_drop_geometry()
+
+datatable(busstop_hex, class = 'cell-border stripe', options = list(pageLength = 5))
 ```
+
+Let us check for duplicates.
 
 ```{r}
-write_rds(honeycomb_grid, "Take-home Exercise 2/data/rds/hexagon_busstop.rds")
+busstop_hex %>%
+  group_by(BUS_STOP_N, grid_id, num_bs) %>%
+  filter(n()>1) %>%
+  ungroup()
 ```
 
-### **5.2 Combine Busstop and mpsz**
+The output says there is no duplicate.
 
-Next, we are going to combine the datset mpsz and hexagon.
-
-```{r}
-busstop_mpsz <- st_intersection(busstop, mpsz) %>%
-  select(BUS_STOP_N, SUBZONE_C) 
-```
-
-### **5.3 Combining Hexagon and busstop_mpsz**
-
-```{r}
-hexagon_bsmpsz <- st_join(busstop_mpsz , hexagon,
-            by = c("geometry" = "geometry")) 
-```
-
-### **5.4 Combine odbus6_9 with od_data**
+### **5.2 Combine odbus6_9 with Hexagon**
 
 Combine the Hexagon and busstop_mpsz with the odbus6_9 data to give me the unique identifier of the origin:
 
+First, we append the grid_id f. By doing so, we get the fields 'ORIGIN_GRID_ID' and 'ORIGIN_LOC_DESC' .
+
 ```{r}
-bm6_9 <- left_join(odbus6_9 , hexagon_bsmpsz,
+od_data <- left_join(odbus6_9 , busstop_hex,
             by = c("ORIGIN_PT_CODE" = "BUS_STOP_N")) %>%
   rename(ORIGIN_BS = ORIGIN_PT_CODE,
-         ORIGIN_SZ = SUBZONE_C,
-         DESTIN_BS = DESTINATION_PT_CODE)
+         ORIGIN_GRID_ID = grid_id,
+         DESTIN_BS = DESTINATION_PT_CODE,
+         ORIGIN_LOC_DESC= LOC_DESC)
 ```
 
 Now, we check the duplicate. If duplicated records exist, the code chunk below will be used to retain the unique records.
 
 ```{r}
-duplicate <- bm6_9 %>%
-  group_by_all() %>%
+duplicate <- od_data %>%
+  group_by_all() %>% 
+  #group_by(ORIGIN_BS, DESTIN_BS) %>%
   filter(n()>1) %>%
   ungroup()
 
-bm6_9 <- unique(bm6_9)
+duplicate
 ```
 
-It will be a good practice to confirm if the duplicating records issue has been addressed fully.
-
-Next, we will update od_data data frame with Combine Hexagon and Busstop_Mpsz with destination:
+Next, perform another left join to get the 'DESTIN_GRID_ID' and the 'DESTIN_LOC_DESC' into "od_data" df. The number of rows before and after the left joins are the same.
 
 ```{r}
-bm6_9_1 <- left_join(bm6_9 , hexagon_bsmpsz,
-            by = c("DESTIN_BS" = "BUS_STOP_N")) 
+od_data <- left_join(od_data, busstop_hex,
+            by = c("DESTIN_BS" = "BUS_STOP_N")) %>%
+  rename(DESTIN_GRID_ID = grid_id,
+         DESTIN_LOC_DESC= LOC_DESC,
+         num_bs_origin = num_bs.x,
+         num_bs_destin = num_bs.y) 
 ```
 
-Before continue, it is a good practice for us to check for duplicating records once again.
+**Final clean-up of "od_data" df.**
+
+1.  There are missing grid_ids for some of the origin and destination bus stop because the *Bus Stops Location* data uploaded by LTA in July 2023 could be more outdated than *Passenger Volume by Origin Destination Bus Stops data* collected in August 2023. We will drop rows with missing values.
+
+2.  Group-by 'ORIGIN_GRID_ID' and 'DESTIN_GRID_ID' to generate a new field 'MORNING_PEAK' that contains the summation of all trips between each pair of i,j hexagons. (i denotes origin and j denotes destination)
 
 ```{r}
-duplicate <- bm6_9_1 %>%
+library(data.table)
+
+# Convert to data.table
+setDT(od_data)
+
+# Optimized processing
+od_data <- od_data[!is.na(ORIGIN_GRID_ID) & !is.na(DESTIN_GRID_ID), 
+                   .(MORNING_PEAK = sum(TRIPS, na.rm = TRUE),
+                     ORIGIN_DESC = paste(unique(ORIGIN_LOC_DESC), collapse = ', '),
+                     DESTIN_DESC = paste(unique(DESTIN_LOC_DESC), collapse = ', ')), 
+                   by = .(ORIGIN_GRID_ID, DESTIN_GRID_ID)]
+
+```
+
+## 6 Compute Distance Matrix by analytic hexagon level
+
+The reason for doing so is because it is faster to compute distance matrix using sp than sf package.
+
+```{r}
+bs_count_sp <- as(bs_count, "Spatial")
+```
+
+Next, spDists() of sp package will be used to compute the Euclidean distance between the centroids of the hexagons.
+
+```{r}
+dist <- sp::spDists(bs_count_sp, 
+                longlat = FALSE) # already projected in EPSG:3414
+head(dist, n=c(10, 10))
+```
+
+**Labelling column and row headers of a distance matrix**
+
+First, we will create a list sorted according to the the distance matrix by grid_id.
+
+```{r}
+grid_id_names <- bs_count$grid_id
+
+colnames(dist) <- paste0(grid_id_names)
+rownames(dist) <- paste0(grid_id_names)
+dist[1:5,1:5]
+```
+
+**Pivoting distancing value by grid_id**
+
+Next, we will pivot the distance matrix into a long table by using the row and column grid_id as show in the code chunk below.
+
+**Wide:**
+
+```{r}
+matrix(1:6, nrow = 2, ncol = 3)
+distPair <- reshape2::melt(dist) %>%
+  rename(dist = value)
+head(distPair, 10)
+```
+
+**Long:**
+
+```{r}
+reshape2::melt(matrix(1:6, nrow = 2, ncol = 3)) %>% knitr::kable()
+```
+
+```{r}
+distPair <- reshape2::melt(dist) %>%
+  rename(dist = value)
+head(distPair, 10)
+```
+
+Three new columns generated, (1) 'var1', (2) 'var2' and (3) 'value' containing the distance for the corresponding hex i -hex j pair; thus rename to 'dist'
+
+**Updating the intra-zonal distances**
+
+We will append a constant value to replace the intra-zonal distance of 0.
+
+First, we will remove distance = 0 and find out the **minimum value** of the inter-zonal distance.
+
+```{r}
+distPair %>%
+  filter(dist > 0) %>%
+  summary()
+```
+
+The minimum inter-hexagon travel was actually 750 m (indicating travelling to adjacent hexagon). If a hexagon's apothem is [325m](https://www.omnicalculator.com/math/hexagon) (middle to edge), then the length of its long diagonal will be 750m (vertex to opposite vertex).
+
+So we could set the intra-zonal distance to be approximately 300 m.
+
+```{r}
+distPair$dist <- ifelse(distPair$dist == 0,
+                        300, distPair$dist)
+```
+
+```{r}
+distPair <- distPair %>%
+  rename(ORIGIN_GRID_ID = Var1,
+         DESTIN_GRID_ID = Var2)
+
+distPair %>% head()
+```
+
+```{r}
+glimpse(distPair)
+```
+
+## 7 Preparing flow data
+
+In this section, our desired output is a dataframe containing number of TRIPS and distance for each origin and destination grid id.
+
+```{r}
+flow_data <- od_data %>%
+  group_by(ORIGIN_GRID_ID, DESTIN_GRID_ID) %>% 
+  summarize(TRIPS = sum(MORNING_PEAK)) 
+
+head(flow_data) %>%  kable()
+```
+
+### 7.1 **Separating intra-flow**
+
+```{r}
+flow_data$FlowNoIntra <- ifelse(
+  flow_data$ORIGIN_GRID_ID == flow_data$DESTIN_GRID_ID, 
+  0, flow_data$TRIPS)
+flow_data$offset <- ifelse(
+  flow_data$ORIGIN_GRID_ID == flow_data$DESTIN_GRID_ID, 
+  0.000001, 1)
+```
+
+```{r}
+inter_zonal_flow <- flow_data %>% 
+  filter(FlowNoIntra >0)
+```
+
+```{r}
+glimpse(inter_zonal_flow)
+```
+
+7.2 combine "inter_zonal_flow" with "distPair"
+
+```{r}
+inter_zonal_flow$ORIGIN_GRID_ID  <- as.factor(inter_zonal_flow$ORIGIN_GRID_ID)
+inter_zonal_flow$DESTIN_GRID_ID  <- as.factor(inter_zonal_flow$DESTIN_GRID_ID )
+distPair$ORIGIN_GRID_ID  <- as.factor(distPair$ORIGIN_GRID_ID)
+distPair$DESTIN_GRID_ID  <- as.factor(distPair$DESTIN_GRID_ID )
+```
+
+```{r}
+flow_data1 <- inter_zonal_flow %>%
+  left_join (distPair,
+             by = c("ORIGIN_GRID_ID" = "ORIGIN_GRID_ID",
+                    "DESTIN_GRID_ID" = "DESTIN_GRID_ID"))
+
+glimpse(flow_data1)
+```
+
+```{r}
+head(flow_data1) %>% knitr::kable()
+```
+
+## **8 Visualising Spatial Interaction**
+
+### **8.1 Removing intra-zonal flows**
+
+The code chunk below will be used to remove intra-zonal flows.
+
+```{r}
+od_data1 <- od_data[od_data$ORIGIN_GRID_ID!=od_data$DESTIN_GRID_ID,]
+```
+
+```{r}
+head(od_data1)
+```
+
+```{r}
+flowLine <- od2line(flow=flow_data1,
+                    zones= bs_count,
+                    zone_code= 'grid_id')
+```
+
+```{r}
+od_data1$ORIGIN_GRID_ID <- as.factor(od_data1$ORIGIN_GRID_ID)
+od_data1$DESTIN_GRID_ID <- as.factor(od_data1$DESTIN_GRID_ID)
+flowLine$ORIGIN_GRID_ID <- as.factor(flowLine$ORIGIN_GRID_ID)
+flowLine$DESTIN_GRID_ID <- as.factor(flowLine$DESTIN_GRID_ID)
+```
+
+```{r}
+flowLine_1 <- left_join(flowLine, od_data1) %>% 
+  select(-c(MORNING_PEAK))
+```
+
+```{r}
+write_rds(flowLine_1,
+          "Take-home Exercise 2/data/rds/flowLine_1.rds")
+```
+
+```{r}
+flowLine_1 <- read_rds("Take-home Exercise 2/data/rds/flowLine_1.rds")
+```
+
+### 8.2 **Visualisation and Discussion**
+
+```{r}
+tmap_mode('plot')
+
+filtered_flowLine <- flowLine %>%
+  filter(TRIPS >= 5000)
+
+bs_count_filtered <- bs_count %>%
+  filter(grid_id %in% c(filtered_flowLine$ORIGIN_GRID_ID, filtered_flowLine$DESTIN_GRID_ID))
+
+tm_shape(mpsz) +
+  tm_polygons(alpha=0.3)+
+  filtered_flowLine %>%
+  tm_shape() +
+  tm_lines(lwd = 'TRIPS',
+           style = 'quantile',
+           scale= c(1, 3, 9, 15, 21, 30),
+           #scale= c(0.1, 1, 3, 5, 7, 10),
+           n = 6,
+           alpha= 0.3,
+           col='blue') +
+  tm_view(set.zoom.limits = c(11,17)) +
+  tm_layout(main.title = 'O-D Flow On Weekday Morning Peak hour' ,
+            main.title.position = "center",
+            main.title.size = 2.0,
+            main.title.fontface = 'bold') +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+## 9 **Assemble propulsive and attractiveness variables**
+
+### 9.1 Geospatial data 1 "Business"
+
+For this part, 'Business' dataset will be used to illustrate citizens' commuting.
+
+```{r}
+business <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "Business") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+business<- unique(business)
+```
+
+```{r}
+bs_count$business_ct = lengths(st_intersects(bs_count,business))
+```
+
+Now, we create the image of business map
+
+```{r}
+tmap_mode('plot')
+tmap_options(check.and.fix = TRUE)
+
+tm_shape(mpsz)+
+  tm_polygons(alpha=0.3) +
+tm_shape(bs_count[bs_count$business_ct >= 50,]) +
+  tm_polygons(alpha = 0.3,
+              col='green') +
+  tm_shape(business) +
+  tm_dots(size=0.01) +
+    tm_layout(main.title = "Business location",
+          main.title.fontface = 'bold',
+          main.title.position = "center",
+          main.title.size = 2,
+          legend.height = 0.45, 
+          legend.width = 0.35,
+          frame = TRUE) + 
+  tm_view(set.zoom.limits = c(11,16)) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+### 9.2 **Geospatial dataset 2** "FinServ"
+
+Second, "FinServ" will be used to illustrate citizens work in the finanial services secor.
+
+```{r}
+finserv <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                   layer = "FinServ") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+honeycomb_grid_sf$`FINANCE_COUNT`<- lengths(
+  st_intersects(
+    honeycomb_grid_sf, finserv))
+```
+
+```{r}
+summary(honeycomb_grid_sf$FINANCE_COUNT)
+```
+
+```{r}
+tmap_mode("plot")
+tm_shape(mpsz) +
+  tm_polygons() +
+tm_shape(honeycomb_grid_sf) +
+  tm_polygons() +
+tm_shape(finserv) +
+  tm_dots() 
+```
+
+### 9.3 **Geospatial dataset 3** "Train Station Exit Point"
+
+*Train_Station_Exit_Layer* shapefile downloaded from LTA data mall. It contains point coordinates of station box exits.
+
+```{r}
+train_exit <- st_read(dsn='Take-home Exercise 2/data/geospatial',
+                  layer='Train_Station_Exit_Layer') %>% 
+  st_transform(crs=3414)
+```
+
+```{r}
+train_exit %>%
+  group_by(stn_name, exit_code) %>%
+  filter(n()>1) %>%
+  ungroup()
+```
+
+Remove the duplicates
+
+```{r}
+train_exit <- train_exit %>%
+  distinct(stn_name,
+           exit_code,
+           .keep_all = TRUE)
+
+train_exit %>%
+  group_by(stn_name, exit_code) %>%
+  filter(n()>1) %>%
+  ungroup()
+```
+
+```{r}
+bs_count$train_exit_ct = lengths(st_intersects(bs_count,train_exit))
+bs_count %>% arrange(desc(train_exit_ct)) %>% head()
+```
+
+```{r}
+tmap_mode('plot')
+tmap_options(check.and.fix = TRUE)
+
+tm_shape(mpsz)+
+  tm_polygons(alpha=0.3) +
+tm_shape(bs_count[bs_count$train_exit_ct >=10,]) +
+  tm_polygons(alpha = 0.3,
+              col='green') +
+  tm_shape(train_exit) +
+  tm_dots(size=0.01) +
+  tm_layout(main.title = "Train exits location",
+          main.title.fontface = 'bold',
+          main.title.position = "center",
+          main.title.size = 2,
+          legend.height = 0.45, 
+          legend.width = 0.35,
+          frame = TRUE) + 
+  tm_view(set.zoom.limits = c(11,16)) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+### 9.4 Geospatial 4 "Pre-Schools Locations"
+
+We will import *Pre-Schools Locations kml* file from [data.gov.sg](https://beta.data.gov.sg/collections/2064/view). It is a POINT sf object.
+
+```{r}
+preschool = st_read('Take-home Exercise 2/data/geospatial/PreSchoolsLocation.kml') %>% 
+  st_transform(preschool, crs=3414)
+```
+
+```{r}
+bs_count$preschool_ct = lengths(st_intersects(bs_count,preschool))
+```
+
+```{r}
+tmap_mode('plot')
+tmap_options(check.and.fix = TRUE)
+
+tm_shape(mpsz)+
+  tm_polygons(alpha=0.3) +
+tm_shape(bs_count[bs_count$preschool_ct >= 10,]) +
+  tm_polygons(alpha = 0.3,
+              col='red') +
+  tm_shape(preschool) +
+  tm_dots(size=0.01) +
+    tm_layout(main.title = "Preschool location",
+          main.title.fontface = 'bold',
+          main.title.position = "center",
+          main.title.size = 2,
+          legend.height = 0.45, 
+          legend.width = 0.35,
+          frame = TRUE) + 
+  tm_view(set.zoom.limits = c(11,16)) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+## 10 **The attractiveness and propulsive aspatial data**
+
+### 10.1 Aspatial 1 "HDB"
+
+'HDB' dataset is used to understand the location of HBD in the hexagon layer
+
+```{r}
+hdb <- read_csv("Take-home Exercise 2/data/aspatial/hdb.csv") %>% 
+  filter(residential == "Y") %>% 
+  mutate(total_rental_ct = `1room_rental`*1 + `2room_rental`*2 + `3room_rental`*3 + `other_room_rental`*4,
+         total_1room_ct = `1room_sold`,
+         total_2room_ct = `2room_sold`*2,
+         total_3room_ct = `3room_sold`*10,
+         total_4room_ct = `4room_sold`*21,
+         total_5room_ct = `5room_sold`*13,
+         total_exec_ct = `exec_sold`*4,
+         total_multi_ct = `multigen_sold`*13,
+         total_studio_ct = `studio_apartment_sold`,
+         total_owner_ct = `1room_sold`*1 + `2room_sold`*2 + `3room_sold`*10 + `4room_sold`*21 + `5room_sold`*13 + `exec_sold`*4 + `multigen_sold`*13 + `studio_apartment_sold`*1) %>% 
+  select(blk_no, street, total_rental_ct, total_1room_ct, total_1room_ct,total_2room_ct,total_3room_ct,total_4room_ct,total_5room_ct,total_exec_ct,total_multi_ct, total_studio_ct,total_owner_ct, lat, lng)
+```
+
+```{r}
+hdb_sf <- st_as_sf(hdb,
+                   coords = c('lng','lat'),
+                        crs=4326) %>% 
+  st_transform(crs=3414)
+
+hdb_sf
+```
+
+After transformation, we can see that the 'hdb_hex' contains 10133 rows.
+
+```{r}
+hdb_hex <- st_intersection(hdb_sf,bs_count)
+```
+
+Check for the duplicates.
+
+```{r}
+hdb_hex<- hdb_hex %>% 
+  st_drop_geometry()
+hdb_hex %>% 
   group_by_all() %>%
   filter(n()>1) %>%
   ungroup()
 ```
 
 ```{r}
-bm6_9_1 <- unique(bm6_9_1)
-bm6_9_1 <- bm6_9_1 %>%
-  drop_na() %>%
-  group_by(geometry.x, geometry.y) %>%
-  summarise(MORNING_PEAK = sum(TRIPS))
+hdb_hex <- hdb_hex %>% 
+  group_by(grid_id) %>% 
+  summarise(hdb_rental_ct = sum(total_rental_ct),
+            hdb_1room_ct = sum(total_1room_ct),
+            hdb_2room_ct = sum(total_2room_ct),
+            hdb_3room_ct = sum(total_3room_ct),
+            hdb_4room_ct = sum(total_4room_ct),
+            hdb_5room_ct = sum(total_5room_ct),
+            hdb_exec_ct = sum(total_exec_ct),
+            hdb_multi_ct = sum(total_multi_ct),
+            hdb_studio_ct = sum(total_studio_ct),
+            hdb_owner_ct = sum (total_owner_ct)) %>% 
+  ungroup()
 ```
 
-Save the output on rds for the rest of the project.
+```{r}
+bs_count <- left_join(bs_count, hdb_hex,
+                      by= c('grid_id' = 'grid_id'))
+
+bs_count<- bs_count %>% 
+  mutate(hdb_rental_ct = replace_na(hdb_rental_ct, 0),
+         hdb_1room_ct = replace_na(hdb_1room_ct, 0),
+         hdb_2room_ct = replace_na(hdb_2room_ct, 0),
+         hdb_3room_ct = replace_na(hdb_3room_ct, 0),
+         hdb_4room_ct = replace_na(hdb_4room_ct, 0),
+         hdb_5room_ct = replace_na(hdb_5room_ct, 0),
+         hdb_exec_ct = replace_na(hdb_exec_ct, 0),
+         hdb_multi_ct = replace_na(hdb_multi_ct, 0),
+         hdb_studio_ct = replace_na(hdb_studio_ct, 0),
+         hdb_owner_ct = replace_na(hdb_owner_ct, 0))
+```
 
 ```{r}
-write_rds(bm6_9_1, "Take-home Exercise 2/data/rds/bm6_9_1.rds")
-bm6_9_1 <- read_rds("Take-home Exercise 2/data/rds/bm6_9_1.rds")
+tmap_mode('plot')
+tmap_options(check.and.fix = TRUE)
+
+tm_shape(mpsz)+
+  tm_polygons(alpha=0.3) +
+tm_shape(bs_count) +
+  tm_fill('hdb_owner_ct',
+          alpha= 0.7) +
+  tm_borders(col='white') +
+  tm_layout(main.title = "Population density of HDB residents 2023 by Hexagon",
+            main.title.fontface = 'bold',
+            main.title.position = "center",
+            main.title.size = 2,
+            legend.height = 0.55, 
+            legend.width = 0.45,
+            frame = TRUE) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+### 10.2 Aspatial dataset 2 "Schools general information"
+
+*School Directory and Information* - Dataset is taken from [Data\@Gov](https://beta.data.gov.sg/). This information is useful as the morning period will consist of students going to school
+
+```{r}
+school <- read_csv('Take-home Exercise 2/data/aspatial/Generalinformationofschools.csv')
+head(school) %>% kable
+```
+
+```{r}
+ter <- read_csv('Take-home Exercise 2/data/aspatial/schools1.csv')
+ter %>% kable
+```
+
+Next, the code chunk below will be used to combine both "*found"* and"not found" data.frames into a single tibble data.frame called "merged".
+
+```{r}
+url <- 'https://www.onemap.gov.sg/api/common/elastic/search'
+
+postcodes <- school$`postal_code`
+```
+
+I will manually clean up for ZhengHua Secondary School ([link](https://www.google.com/search?q=zhenghua+secondary+school&rlz=1C1YTUH_enSG1024SG1038&oq=zhe&gs_lcrp=EgZjaHJvbWUqBggAEEUYOzIGCAAQRRg7Mg0IARAuGK8BGMcBGIAEMgYIAhBFGEAyBggDEEUYOTIKCAQQLhixAxiABDINCAUQLhivARjHARiABDINCAYQLhiDARixAxiABDIGCAcQRRg80gEIMzMyM2owajeoAgCwAgA&sourceid=chrome&ie=UTF-8)). File is saved as schools1.csv
+
+Next, I will import *schools1.csv* into R environment and at the same time tidying the data by selecting only the necessary fields as well as rename some fields.
+
+```{r}
+library(httr)
+```
+
+```{r}
+found <- data.frame()
+not_found <- data.frame()
+
+
+for(postcode in postcodes) {
+  query <- list('searchVal' = postcode, 'returnGeom' = 'Y', 'getAddrDetails' = 'Y', 'pageNum' = '1')
+  res <- GET(url, query=query)
+
+  
+  if((content(res)$found)!=0){
+    found<-rbind(found, data.frame(content(res))[4:13])
+  } else{
+    not_found = data.frame(postcode)
+  }
+}
+```
+
+```{r}
+merged = merge(school, found, by.x = 'postal_code' , by.y='results.POSTAL', all=TRUE)
+```
+
+```{r}
+write.csv(merged, file = 'Take-home Exercise 2/data/aspatial/schools_geocoded.csv')
+write.csv(not_found, file = 'Take-home Exercise 2/data/aspatial/not_found.csv')
+
+```
+
+```{r}
+sch <- read_csv('Take-home Exercise 2/data/aspatial/schools_geocoded.csv') %>% 
+  select(postal_code, school_name, results.LONGITUDE, results.LATITUDE )
+```
+
+**Convert "sch" to sf point object with longitude and latitude**
+
+```{r}
+sch <- sch %>%
+  filter(!is.na(results.LONGITUDE) & !is.na(results.LATITUDE))
+sch_sf <- st_as_sf(sch,
+                   coords = c('results.LONGITUDE','results.LATITUDE'),
+                        crs=4326) %>% 
+  st_transform(crs=3414)
+```
+
+```{r}
+bs_count$sch_ct = lengths(st_intersects(bs_count,sch_sf))
+bs_count %>% arrange(desc(sch_ct)) %>% head()
+```
+
+```{r}
+tmap_mode('plot')
+tmap_options(check.and.fix = TRUE)
+
+tm_shape(mpsz)+
+  tm_polygons(alpha=0.3) +
+tm_shape(bs_count[bs_count$sch_ct>=4,]) +
+  tm_polygons(alpha = 0.3,
+              col = 'red') +
+  tm_shape(sch_sf) +
+  tm_dots() +
+    tm_layout(main.title = "Schools location",
+          main.title.fontface = 'bold',
+          main.title.position = "center",
+          main.title.size = 2,
+          legend.height = 0.45, 
+          legend.width = 0.35,
+          frame = TRUE) + 
+  tm_view(set.zoom.limits = c(11,16)) +
+  tm_compass(type="8star", size = 2) +
+  tm_scale_bar()
+```
+
+## 11 **Append all attributes to "flow_data1" df**
+
+First, convert 'grid_id' in sz_count to factor format.
+
+```{r}
+bs_count$grid_id <- as.factor(bs_count$grid_id)
+```
+
+```{r}
+flow_data1 <- flow_data1 %>%
+  left_join(bs_count,
+            by = c('ORIGIN_GRID_ID' = 'grid_id')) %>%
+  rename(ORIGIN_BUSINESS_CT=business_ct,
+         ORIGIN_SCH_CT=sch_ct,
+         ORIGIN_RENTAL_CT=hdb_rental_ct,
+         ORIGIN_1ROOM_CT=hdb_1room_ct,
+         ORIGIN_2ROOM_CT=hdb_2room_ct,
+         ORIGIN_3ROOM_CT=hdb_3room_ct,
+         ORIGIN_4ROOM_CT=hdb_4room_ct,
+         ORIGIN_5ROOM_CT=hdb_5room_ct,
+         ORIGIN_EXEC_CT=hdb_exec_ct,
+         ORIGIN_MULTI_CT=hdb_multi_ct,
+         ORIGIN_STUDIO_CT=hdb_studio_ct,
+         ORIGIN_OWNER_CT=hdb_owner_ct) %>%
+  select(-c(num_bs,geometry))
+```
+
+```{r}
+flow_data1 <- flow_data1 %>%
+  left_join(bs_count,
+            by = c('DESTIN_GRID_ID' = 'grid_id')) %>%
+  rename(
+         DESTIN_BUSINESS_CT=business_ct,
+         DESTIN_SCH_CT=sch_ct,
+         DESTIN_RENTAL_CT=hdb_rental_ct,
+         DESTIN_1ROOM_CT=hdb_1room_ct,
+         DESTIN_2ROOM_CT=hdb_2room_ct,
+         DESTIN_3ROOM_CT=hdb_3room_ct,
+         DESTIN_4ROOM_CT=hdb_4room_ct,
+         DESTIN_5ROOM_CT=hdb_5room_ct,
+         DESTIN_EXEC_CT=hdb_exec_ct,
+         DESTIN_MULTI_CT=hdb_multi_ct,
+         DESTIN_STUDIO_CT=hdb_studio_ct,
+         DESTIN_OWNER_CT=hdb_owner_ct) %>%
+  select(-c(num_bs, geometry))
+```
+
+```{r}
+write_rds(flow_data1,
+          "Take-home Exercise 2/data/rds/flow_data_tidy.rds")
+```
+
+```{r}
+flow_data1 <- read_rds("Take-home Exercise 2/data/rds/flow_data_tidy.rds")
+```
+
+### 11.1 Calibrating Spatial Interaction Models
+
+```{r}
+ggplot(data = flow_data1,
+       aes(x = TRIPS)) +
+  geom_histogram(color='black',size= 0.3, fill = '#DD8888') +
+  labs(y= 'Count of TRIPS', x='TRIPS') +
+  theme(axis.title.y=element_text(angle = 0),
+        plot.title = element_text(face="bold")) +
+  ggtitle('Distribution of TRIPS')
+```
+
+```{r}
+ggplot(data = flow_data1,
+       aes(x = dist, # independent
+           y = TRIPS)) +  #dependent
+  geom_point() +
+  geom_smooth(method = lm) +
+  labs(y= 'TRIPS', x='dist') +
+  theme(axis.title.y=element_text(angle = 0),
+        plot.title = element_text(face="bold")) +
+  ggtitle('Relationship between TRIPS and Distance')
+```
+
+```{r}
+ggplot(data = flow_data1,
+       aes(x = log(dist),
+           y = log(TRIPS))) +
+  geom_point() +
+  geom_smooth(method = lm) +
+  labs(y= 'log(TRIPS)', x='log(dist)') +
+  theme(axis.title.y=element_text(angle = 0),
+        plot.title = element_text(face="bold")) +
+  ggtitle('Relationship between log(TRIPS) and log(dist)')
+```
+
+11.2 Check independent variables for zero values
+
+```{r}
+summary(flow_data1)
+```
+
+```{r}
+columns_to_transform <- c(
+"ORIGIN_TRAIN_EXIT_CT", "ORIGIN_PRESCHOOL_CT",  "ORIGIN_BUSINESS_CT",   "ORIGIN_FINSERV_CT",   "ORIGIN_SCH_CT",        "ORIGIN_RENTAL_CT", "ORIGIN_1ROOM_CT",      "ORIGIN_2ROOM_CT",      "ORIGIN_3ROOM_CT",      "ORIGIN_4ROOM_CT",      "ORIGIN_5ROOM_CT",      "ORIGIN_EXEC_CT",       "ORIGIN_MULTI_CT",      "ORIGIN_STUDIO_CT",    "ORIGIN_OWNER_CT",      "DESTIN_TRAIN_EXIT_CT", "DESTIN_PRESCHOOL_CT",  "DESTIN_BUSINESS_CT",   "DESTIN_FINSERV_CT",   "DESTIN_SCH_CT",        "DESTIN_RENTAL_CT", "DESTIN_1ROOM_CT",      "DESTIN_2ROOM_CT",      "DESTIN_3ROOM_CT",     
+"DESTIN_4ROOM_CT",      "DESTIN_5ROOM_CT",      "DESTIN_EXEC_CT",       "DESTIN_MULTI_CT",      "DESTIN_STUDIO_CT",    "DESTIN_OWNER_CT"
+)
+
+
+for (col in columns_to_transform) {
+  flow_data1[[col]] <- ifelse(flow_data1[[col]] == 0, 0.99, flow_data1[[col]])
+}
 ```
