@@ -159,3 +159,275 @@ od_data <- left_join(odbus6_9 , busstop_mpsz,
          ORIGIN_SZ = SUBZONE_C,
          DESTIN_BS = DESTINATION_PT_CODE)
 ```
+
+Before continue, it is a good practice for us to check for duplicating records.
+
+```{r}
+duplicate <- od_data %>%
+  group_by_all() %>%
+  filter(n()>1) %>%
+  ungroup()
+```
+
+If duplicated records are found, the code chunk below will be used to retain the unique records.
+
+```{r}
+od_data <- unique(od_data)
+```
+
+It will be a good practice to confirm if the duplicating records issue has been addressed fully.
+
+Next, we will update od_data data frame with the planning subzone codes.
+
+```{r}
+od_data <- left_join(od_data , busstop_mpsz,
+            by = c("DESTIN_BS" = "BUS_STOP_N")) 
+```
+
+```{r}
+duplicate <- od_data %>%
+  group_by_all() %>%
+  filter(n()>1) %>%
+  ungroup()
+```
+
+```{r}
+od_data <- unique(od_data)
+```
+
+```{r}
+od_data <- od_data %>%
+  rename(DESTIN_SZ = SUBZONE_C) %>%
+  drop_na() %>%
+  group_by(ORIGIN_SZ, DESTIN_SZ) %>%
+  summarise(TRIPS = sum(TRIPS))
+```
+
+The `od_data` data.frame should look similar the table below.
+
+```{r}
+kable(head(od_data, n = 5))
+```
+
+```{r}
+write_rds(od_data, "In-class_Ex5/data/rds/od_data.rds")
+```
+
+### **Computing Distance Matrix**
+
+In spatial interaction, a distance matrix is a table that shows the distance between pairs of locations. For example, in the table below we can see an Euclidean distance of 3926.0025 between MESZ01 and RVSZ05, of 3939.1079 between MESZ01 and SRSZ01, and so on. By definition, an location's distance from itself, which is shown in the main diagonal of the table, is 0.
+
+#### Converting from sf data.table to SpatialPolygonsDataFrame
+
+There are at least two ways to compute the required distance matrix. One is based on sf and the other is based on sp. Past experience shown that computing distance matrix by using sf function took relatively longer time that sp method especially the data set is large. In view of this, sp method is used in the code chunks below.
+
+First [`as.Spatial()`](https://r-spatial.github.io/sf/reference/coerce-methods.html) will be used to convert *mpsz* from sf tibble data frame to SpatialPolygonsDataFrame of sp object as shown in the code chunk below.
+
+```{r}
+mpsz_sp <- as(mpsz_busstop, "Spatial")
+mpsz_sp
+```
+
+#### Computing the distance matrix
+
+Next, [`spDists()`](https://www.rdocumentation.org/packages/sp/versions/2.1-1/topics/spDistsN1) of sp package will be used to compute the Euclidean distance between the centroids of the planning subzones.
+
+```{r}
+DISTANCE <- spDists(mpsz_sp, 
+                    longlat = FALSE)
+```
+
+```{r}
+head(DISTANCE, n=c(10, 10))
+```
+
+Notice that the output *dist* is a matrix object class of R. Also notice that the column heanders and row headers are not labeled with the planning subzone codes.
+
+#### Labelling column and row heanders of a distance matrix
+
+First, we will create a list sorted according to the the distance matrix by planning sub-zone code.
+
+```{r}
+sz_names <- mpsz_busstop$SUBZONE_C
+```
+
+Next we will attach `SUBZONE_C` to row and column for distance matrix matching ahead
+
+```{r}
+colnames(DISTANCE) <- paste0(sz_names)
+rownames(DISTANCE) <- paste0(sz_names)
+```
+
+#### Pivoting distance value by SUBZONE_C
+
+Next, we will pivot the distance matrix into a long table by using the row and column subzone codes as show in the code chunk below.
+
+```{r}
+distPair <- melt(DISTANCE) %>%
+  rename(DISTANCE = value)
+head(distPair, 10)
+```
+
+The code chunk below is used to rename the origin and destination fields.
+
+```{r}
+distPair <- distPair %>%
+  rename(ORIGIN_SZ = Var1,
+         DESTIN_SZ = Var2)
+```
+
+Now, `left_join()` of **dplyr** will be used to *flow_data* dataframe and *distPair* dataframe. The output is called *flow_data1*.
+
+```{r}
+flow_data <- distPair %>%
+  left_join (od_data) %>%
+  mutate(TRIPS = coalesce(TRIPS, 0))
+```
+
+The `flow_data` should look similar the table below.
+
+```{r}
+kable(head(flow_data, n = 10))
+```
+
+Before moving on to the next task, let's save *flow_data* into an rds file by usign the code chunk below.
+
+```{r}
+write_rds(flow_data, "In-class_Ex5/data/rds/mpsz_flow.rds")
+```
+
+### **Preparing Explanatory Variables**
+
+The third input data of **spflow** is a data.frame that contains all the explanatory variables of the geographical unit (i.e. Planning Subzone).
+
+#### Population by age group variables
+
+For the purpose of this exercise, we will include three population age-groups as the explanatory variables. They are population age 7-12, 13-24, and 25-64. These information are available in a data file called *pop.csv*.
+
+The code chunk below will be used to import *pop.csv* into R environment and save it as an tibble data.frame object called *pop*.
+
+```{r}
+pop <- read_csv("In-class_Ex5/data/aspatial/pop.csv")
+```
+
+```{r}
+mpsz_var <- mpsz_busstop %>%
+  left_join(pop,
+            by = c("PLN_AREA_N" = "PA",
+                   "SUBZONE_N" = "SZ")) %>%
+  select(1:2, 7:11) %>%
+  rename(SZ_NAME = SUBZONE_N,
+         SZ_CODE = SUBZONE_C)
+```
+
+```{r}
+kable(head(mpsz_var[, 1:6], n = 6))
+```
+
+#### Deriving explanatory variables using Point-in-Polygon count
+
+First, we will import `schools.rds` into R environment.
+
+```{r}
+schools <- read_rds("In-class_Ex5/data/rds/schools.rds")
+```
+
+The, code chunk below will be used to perform Point-in-Polygon count analysis and save the derived values into a new field of *mpsz_var* called *SCHOOL_COUNT*.
+
+```{r}
+mpsz_var$`SCHOOL_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, schools))
+```
+
+Next, we will import the rest of the shapefiles into R environemnt using the code chunk below.
+
+```{r}
+business <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "Business") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+retails <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "Retails") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+finserv <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "FinServ") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+entertn <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "entertn") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+fb <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "F&B") %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+lr <- st_read(dsn = "In-class_Ex5/data/geospatial",
+                    layer = "Liesure&Recreation") %>%
+  st_transform(crs = 3414)
+```
+
+Then,we will perform Point-in-Polygon analysis for each of these sf object by using the code chunk below.
+
+```{r}
+mpsz_var$`BUSINESS_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, business))
+
+mpsz_var$`RETAILS_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, retails))
+
+mpsz_var$`FINSERV_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, finserv))
+
+mpsz_var$`ENTERTN_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, entertn))
+
+mpsz_var$`FB_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, fb))
+
+mpsz_var$`LR_COUNT`<- lengths(
+  st_intersects(
+    mpsz_var, lr))
+```
+
+```{r}
+glimpse(mpsz_var)
+```
+
+```{r}
+write_rds(mpsz_var, "In-class_Ex5/data/rds/mpsz_var.rds")
+```
+
+## **Preparing spflow objects**
+
+Three **spflow** objects are required, they are:
+
+-   [`spflow_network-class`](https://lukece.github.io/spflow/reference/spflow_network-class.html), an S4 class that contains all information on a spatial network which is composed by a set of nodes that are linked by some neighborhood relation.
+
+-   [`spflow_network_pair-class`](https://lukece.github.io/spflow/reference/spflow_network_pair-class.html), an S4 class which holds information on origin-destination (OD) pairs. Each OD pair is composed of two nodes, each belonging to one network. All origin nodes must belong to the same origin network should be contained in one `spflow_network-class`, and likewise for the destinations.
+
+-   [`spflow_network_multi-class`](https://lukece.github.io/spflow/reference/spflow_network_multi-class.html), an S4 class that gathers information on multiple objects of types `spflow_network-class` and `spflow_network_pair-class`. Its purpose is to ensure that the identification between the nodes that serve as origins or destinations, and the OD-pairs is consistent (similar to relational data bases).
+
+Let us retrieve by using the code chunk below
+
+```{r}
+mpsz_nb <- read_rds("In-class_Ex5/data/rds/mpsz_nb.rds")
+mpsz_flow <- read_rds("In-class_Ex5/data/rds/mpsz_flow.rds")
+mpsz_var <- read_rds("In-class_Ex5/data/rds/mpsz_var.rds")
+```

@@ -1,0 +1,34 @@
+---
+title: "In-class Exercise 4: CSI"
+---
+
+## **Overview**
+
+This in-class exercise is a continuation of Hands-on Exercise 3, In-class Exercise 3 and In-class Exercise 4: Preparing Spatial Interaction Modelling Variables. We will continue our journey of calibrating Spatial Interaction Models by using propulsiveness and attractiveness variables prepared in earlier in-class exercise.
+
+## **Getting Started**
+
+For the purpose of this exercise, five r packages will be used. They are:
+
+-   **sf** for importing, integrating, processing and transforming geospatial data.
+
+-   **tidyverse** for importing, integrating, wrangling and visualising data.
+
+-   **tmap** for plotting cartographicquality thematic maps.
+
+-   [performance](https://easystats.github.io/performance/) for computing model comparison matrices such as rmse.
+
+-   [ggpubr](https://rpkgs.datanovia.com/ggpubr/) for creating publication quality statistical graphics.
+
+```{r}
+pacman::p_load(tmap, sf, performance, knitr,
+               ggpubr, tidyverse)
+```
+
+## **The Data**
+
+This exercise is a continuation of Hands-on Exercise 3 and In-class Exercise 4: Preparing Spatial Interaction Modelling Variables. The following data will be used:
+
+-   *flow_data_tidy.rds*, weekday morning peak passenger flows at planning subzone level.
+
+-   *mpsz.rds*, URA Master Plan 2019 Planning Subzone boundary in simple feature tibble data frame format.

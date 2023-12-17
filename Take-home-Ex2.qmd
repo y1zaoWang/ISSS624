@@ -1,0 +1,984 @@
+---
+title: "Take home Ex2"
+author: "WYZ"
+---
+
+# **Applied Spatial Interaction Models: A case study of Singapore public bus commuter flows** {style="color: rgb(0, 0, 0); font-family: \"Segoe UI\", serif; font-style: normal; font-variant-ligatures: none; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: break-spaces; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; caret-color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;"}
+
+## **1 Background** {style="color: rgb(0, 0, 0); font-family: \"Segoe UI\", serif; font-style: normal; font-variant-ligatures: none; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: break-spaces; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; caret-color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;"}
+
+The scenario highlights the challenges in urban mobility, specifically understanding commuting patterns and the impact of public transportation changes. Traditional methods like commuter surveys are outdated and inefficient. The focus shifts to leveraging digital infrastructure data, such as GPS and SMART card usage, for more dynamic and insightful analysis.The exercise is motivated by two factors: the underutilization of available open data for policy making and the need for practical research in geospatial data science and analysis (GDSA). The task involves using GDSA to integrate diverse data sources, building spatial interaction models to understand public bus transit patterns. This approach aims to provide more effective tools for urban planning and decision-making.
+
+## **2 The Data** {style="color: rgb(0, 0, 0); font-family: \"Segoe UI\", serif; font-style: normal; font-variant-ligatures: none; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: break-spaces; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; caret-color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;"}
+
+### **Open Government Data** {style="font-size: 1.25em !important; color: rgb(0, 0, 0); font-family: \"Segoe UI\", serif; font-style: normal; font-variant-ligatures: none; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: break-spaces; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; caret-color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;"}
+
+For the purpose of this assignment, data from several open government sources will be used:
+
+-   *Passenger Volume by Origin Destination Bus Stops*, *Bus Stop Location*, *Train Station* and *Train Station Exit Point*, just to name a few of them, from [LTA DataMall](http://127.0.0.1:37339/#0){style="text-decoration: underline; color: rgb(0, 0, 255) !important;"}.
+
+-   *Master Plan 2019 Subzone Boundary*, *HDB Property Information*, *School Directory and Information* and other relevant data from [Data.gov.sg](http://127.0.0.1:37339/#0){style="text-decoration: underline; color: rgb(0, 0, 255) !important;"}.
+
+-   *hexagon*, a [hexagon](http://127.0.0.1:37339/#0){style="text-decoration: underline; color: rgb(0, 0, 255) !important;"} layer of 250m (this distance is the perpendicular distance between the centre of the hexagon and its edges.) should be used to replace the relative coarse and irregular Master Plan 2019 Planning Sub-zone GIS data set of URA.
+
+## **3 Getting Started** {style="color: rgb(0, 0, 0); font-family: \"Segoe UI\", serif; font-style: normal; font-variant-ligatures: none; font-variant-caps: normal; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: break-spaces; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; caret-color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;"}
+
+```{r}
+pacman::p_load(sf, sp, tmap, tidyverse, knitr, stplanr, reshape2, performance)
+tmap_mode("plot")
+tmap_style("natural")
+set.seed(1234)
+```
+
+## **4 Data Preparation**
+
+### **4.1 Importing the OD data**
+
+Firstly, we will import the *Passenger Volume by Origin Destination Bus Stops* data set downloaded from LTA DataMall by using `read_csv()` of **readr** package.
+
+```{r}
+odbus <- read_csv("Take-home Exercise 2/data/aspatial/origin_destination_bus_202310.csv")
+kable(head(odbus))
+```
+
+### **4.2 Importing Geospatial data into R**
+
+For the purpose of this exercise, three geospatial data will be used first. They are:
+
+-   BusStop: This data provides the location of bus stop as at last quarter of 2023.
+
+-   MPSZ-2019: This data provides the sub-zone boundary of URA Master Plan 2019.
+
+-   Hexagon: analytical hexagon data of 375m (this distance is the perpendicular distance between the centre of the hexagon and its edges) to represent the [traffic analysis zone (TAZ)](https://tmg.utoronto.ca/files/Reports/Traffic-Zone-Guidance_March-2021_Final.pdf).
+
+```{r}
+mpsz <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                layer = "MPSZ-2019") %>%
+  select(SUBZONE_N)
+```
+
+```{r}
+busstops <- st_read(dsn = "Take-home Exercise 2/data/geospatial",
+                    layer = "BusStop")
+```
+
+```{r}
+write_rds(mpsz, "Take-home Exercise 2/data/rds/mpsz.rds")
+write_rds(busstops, "Take-home Exercise 2/data/rds/busstops.rds")
+```
+
+### 4.3 Creating Hexagon grid
+
+```{r}
+honeycomb <- busstops %>% st_make_grid(cellsize = 750,
+                                       what="polygons",
+                                       square = FALSE) %>%
+  st_sf() %>%
+  filter(lengths(st_intersects(geometry, busstops)) > 0)
+```
+
+Now that we have hexagons properly generated, we will assign id for each hexagon to be used as a unique identifier. We will store this id under the `HEX_ID` column, and can be used in joining data frames.
+
+```{r}
+honeycomb$HEX_ID <- sprintf("H%04d", seq_len(nrow(honeycomb))) %>% as.factor()
+kable(head(honeycomb))
+```
+
+```{r}
+write_rds(honeycomb, "Take-home Exercise 2/data/rds/honeycomb.rds")
+```
+
+## 5 **Spatial Interaction Analysis**
+
+### 5.1 **Generating the O-D trip data by hexagon level**
+
+#### **Filtering the relevant data**
+
+We only need the data for the **weekend morning peak period**, which is from 11 AM - 2 PM on weekends and holidays. As such, we will filter the data for the relevant hours.
+
+```{r}
+od_trips <- odbus %>%
+  filter(DAY_TYPE == "WEEKENDS/HOLIDAY") %>%
+  filter( TIME_PER_HOUR >= 11 &
+            TIME_PER_HOUR < 14
+          ) %>%
+  group_by(ORIGIN_PT_CODE, DESTINATION_PT_CODE) %>%
+  summarise(TRIPS = sum(TOTAL_TRIPS)) %>%
+  rename(
+    ORIG_BUS_STOP_N = ORIGIN_PT_CODE,
+    DEST_BUS_STOP_N = DESTINATION_PT_CODE
+  )
+kable(head(od_trips))
+```
+
+```{r}
+rm(odbus)
+```
+
+To connect the trip data to the their corresponding hexagon, we need to create a lookup table. This will serve as a glue in associating the aspatial `od_trips` data frame to the `honeycomb` data frame.
+
+This can be done via `st_intersection()`.
+
+```{r}
+bs_hex <- st_intersection(busstops, honeycomb) %>%
+  st_drop_geometry() %>%
+  select(c(BUS_STOP_N, HEX_ID))
+kable(head(bs_hex))
+```
+
+#### **Joining *od_trips* and *bs_hex***
+
+Next, we need to associate each origin bus stop and destination bus stop to their corresponding hexagons.
+
+We can use that by doing `inner_join()` twice, once for the origin and another for the destination.
+
+```{r}
+od_trips_w_hex <- od_trips %>%
+  inner_join(bs_hex,
+             by = c("ORIG_BUS_STOP_N" = "BUS_STOP_N")) %>%
+  rename(ORIG_HEX_ID = HEX_ID) %>%
+  inner_join(bs_hex,
+             by = c("DEST_BUS_STOP_N" = "BUS_STOP_N")) %>%
+  rename(DEST_HEX_ID = HEX_ID)
+
+kable(head(od_trips_w_hex))
+```
+
+#### **Aggregating data by hexagon**
+
+Next, we will perform aggregations by `ORIG_HEX_ID` and `DEST_HEX_ID` to have an aggregated sum of trips by hexagon instead of bus stops.
+
+```{r}
+od_hex <- od_trips_w_hex %>%
+  group_by(ORIG_HEX_ID, DEST_HEX_ID) %>%
+  summarise(TRIPS = sum(TRIPS))
+kable(head(od_hex))
+```
+
+**Save point:**
+
+```{r}
+write_rds(bs_hex, "Take-home Exercise 2/data/rds/bs_hex.rds")
+write_rds(od_hex, "Take-home Exercise 2/data/rds/od_hex202310.rds")
+write_rds(od_trips, "Take-home Exercise 2/data/rds/od_trips202310.rds")
+```
+
+```{r}
+rm(od_trips_w_hex)
+```
+
+### 5.3 **Generating the flow lines**
+
+First, we will generate the flow lines using `od2line()`. `honeycomb` will be supplied as the `zone` as it contains the hexagons we are using as the **traffic analysis zones**.
+
+```{r}
+invalid_geoms <- which(!st_is_valid(mpsz))
+
+# If there are invalid geometries, fix them
+if(length(invalid_geoms) > 0) {
+  mpsz[invalid_geoms, ] <- st_make_valid(mpsz[invalid_geoms, ])
+}
+```
+
+```{r}
+flowlines <- od_hex %>% od2line(
+  honeycomb,
+  zone_code = "HEX_ID")
+write_rds(flowlines, "Take-home Exercise 2/data/rds/flowlines202310.rds")
+```
+
+```{r}
+tm_shape(mpsz) +
+  tm_polygons("gray", title = "Singapore Boundary", alpha = 0.5) +
+  
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white", title = "Hexagons", alpha = 1) +
+  
+  tm_shape(flowlines) +
+  tm_lines(lwd = "TRIPS",
+           style = "quantile",
+           col = "red",
+           scale = c(0.1, 1, 3, 5, 7),
+           title.lwd = "# of bus trips",
+           alpha = 0.8) +
+  
+  tm_layout(main.title = "Bus Passenger flow for Weekends/Holidays 11 AM - 2PM (October 2023)",
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  
+  tm_compass(type="8star", size = 2, bg.color = "white", bg.alpha = 0.5) +
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.5) +
+  tm_grid(alpha = 0.2)
+```
+
+```{r}
+write_rds(flowlines, "Take-home Exercise 2/data/rds/flowlines202310.rds")
+```
+
+```{r}
+rm(flowlines)
+rm(od_hex)
+```
+
+## 6 **Spatial Interaction Modelling**
+
+Next, we will prepare the data needed for spatial interaction modelling. Some of these are straightforward to get, especially those of attractiveness variables. Additional steps are needed for more complex data sets, like those needed for propulsiveness variables. We will derive those in a separate section.
+
+### **6.1 Attractiveness variables**
+
+We will first initiate `attractiveness` from `honeycomb`.
+
+```{r}
+attractiveness <- honeycomb
+```
+
+**Because not all of the st_cos(x) == st_crs(y) are ture, it's crucial for all datasets to be in the same CRS before performing spatial operations like intersections. The next steps will all tackle this problem.**
+
+**BUSSTOP:**
+
+```{r}
+attractiveness$BUS_STOP_COUNT <- lengths(
+  st_intersects(attractiveness, busstops))
+```
+
+**ENTERTAINMENT:**
+
+```{r}
+entertn <- st_read(dsn = "Take-home Exercise 2/data/geospatial", layer = "entertn")
+```
+
+```{r}
+st_crs(attractiveness)
+st_crs(entertn)
+
+```
+
+```{r}
+entertn <- st_transform(entertn, st_crs(attractiveness))
+
+```
+
+```{r}
+attractiveness <- st_transform(attractiveness, st_crs(entertn))
+
+```
+
+```{r}
+attractiveness$ENTERTN_COUNT <- lengths(st_intersects(attractiveness, entertn))
+
+```
+
+```{r}
+attractiveness$ENTERTN_COUNT <- lengths(st_intersects(attractiveness, entertn))
+```
+
+**F&B:**
+
+```{r}
+f_and_b <- st_read(dsn = "Take-home Exercise 2/data/geospatial", layer = "F&B")
+```
+
+```{r}
+st_crs(attractiveness)
+st_crs(f_and_b)
+f_and_b <- st_transform(f_and_b, st_crs(attractiveness))
+attractiveness <- st_transform(attractiveness, st_crs(f_and_b))
+attractiveness$F_AND_B_COUNT <- lengths(st_intersects(attractiveness, f_and_b))
+
+```
+
+```{r}
+attractiveness$F_AND_B_COUNT <- lengths(st_intersects(attractiveness, f_and_b))
+```
+
+**Leisure&Recreation:**
+
+```{r}
+leis_rec <- st_read(dsn = "Take-home Exercise 2/data/geospatial", layer = "Liesure&Recreation")
+```
+
+```{r}
+tm_shape(mpsz) +
+  tm_polygons("green", title = "Singapore Boundary", alpha = 0.5) +
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white", title = "Hexagons", alpha = 1) +
+  tm_layout(main.title = "Map of Leisure & Recreation Spots in Singapore",
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type="8star", size = 2, bg.color = "white", bg.alpha = 0.5) +
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.5) +
+  tm_shape(leis_rec) +
+  tm_dots(col = "red", size = 0.005, title = "Leisure & Recreation Spots") +
+  tm_grid(alpha = 0.2)
+```
+
+```{r}
+st_crs(attractiveness)
+st_crs(leis_rec)
+leis_rec <- st_transform(leis_rec, st_crs(attractiveness))
+attractiveness <- st_transform(attractiveness, st_crs(leis_rec))
+attractiveness$LEISURE_COUNT <- lengths(st_intersects(attractiveness, leis_rec))
+```
+
+```{r}
+attractiveness$LEISURE_COUNT <- lengths(st_intersects(attractiveness, leis_rec))
+```
+
+**RETAIL:**
+
+```{r}
+retail <- st_read(dsn = "Take-home Exercise 2/data/geospatial", layer = "Retails")
+```
+
+```{r}
+st_crs(attractiveness)
+st_crs(retail)
+retail <- st_transform(retail, st_crs(attractiveness))
+attractiveness <- st_transform(attractiveness, st_crs(retail))
+attractiveness$RETAIL_COUNT <- lengths(st_intersects(attractiveness, retail))
+```
+
+```{r}
+attractiveness$RETAIL_COUNT <- lengths(st_intersects(attractiveness, retail))
+```
+
+**TRAIN STATION EXITS:**
+
+```{r}
+train_exits <- st_read(dsn = "Take-home Exercise 2/data/geospatial", layer = "Train_Station_Exit_Layer")
+```
+
+```{r}
+tm_shape(mpsz) +
+  tm_polygons("green", title = "Singapore Boundary", alpha = 0.5) +
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white", title = "Hexagons", alpha = 1) +
+  tm_layout(main.title = "Map of Train Station Exits in Singapore",
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type="8star", size = 2, bg.color = "white", bg.alpha = 0.5) +
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.5) +
+  tm_shape(train_exits) +
+  tm_dots(col = "red", size = 0.005, title = "Train Station Exits") +
+  tm_grid(alpha = 0.2)
+```
+
+```{r}
+st_crs(attractiveness)
+st_crs(train_exits)
+train_exits <- st_transform(train_exits, st_crs(attractiveness))
+attractiveness <- st_transform(attractiveness, st_crs(train_exits))
+attractiveness$TRAIN_EXITS_COUNT <- lengths(st_intersects(attractiveness, train_exits))
+```
+
+```{r}
+attractiveness$TRAIN_EXITS_COUNT <- lengths(st_intersects(attractiveness, train_exits))
+```
+
+Let's check if the attractiveness variables have been added correctly.
+
+```{r}
+kable(head(attractiveness))
+```
+
+```{r}
+write_rds(attractiveness, "Take-home Exercise 2/data/rds/attractiveness_no_hdb.rds")
+write_rds(train_exits, "Take-home Exercise 2/data/rds/train_exits.rds")
+```
+
+```{r}
+rm(busstops)
+rm(entertn)
+rm(f_and_b)
+rm(leis_rec)
+rm(retail)
+```
+
+### 6.2 **Deriving Passengers Alighting from Bus Stop**
+
+Using the similar techniques used in [Take-home Exercise 1](https://isss624-kjcpaas.netlify.app/take-home_ex2/Take-home_Ex1/Take-home_Ex1.html#extracting-hourly-of-bus-trips-originating-from-hexagons), we will aggregate the trips using `inner_join()`, `group_by`, and `summarise`.
+
+```{r}
+dest_bus_hex <- od_trips %>%
+  inner_join(bs_hex,
+             by = join_by(DEST_BUS_STOP_N == BUS_STOP_N)) %>%
+  group_by(HEX_ID) %>%
+  summarise(TRIPS = sum(TRIPS))
+kable(head(dest_bus_hex))
+```
+
+```{r}
+write_rds(dest_bus_hex, "Take-home Exercise 2/data/rds/dest_bus_hex202310.rds")
+```
+
+```{r}
+rm(bs_hex)
+rm(od_trips)
+```
+
+## 7 **Deriving HDB population**
+
+### 7.1 **Importing the data**
+
+```{r}
+hdb_vars <- honeycomb
+```
+
+```{r}
+hdb_csv <- read_csv("Take-home Exercise 2/data/aspatial/hdb.csv")
+kable(head(hdb_csv))
+```
+
+```{r}
+hdb_sf <- hdb_csv %>% st_as_sf(coords = c("lng", "lat"),
+                               crs = 4326) %>%
+  st_transform(crs = 3414)
+```
+
+```{r}
+tm_shape(mpsz) +
+  tm_polygons("green", title = "Singapore Boundary", alpha = 0.5) +
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white", title = "Hexagons", alpha = 1) +
+  tm_layout(main.title = "Map of HDB Blocks in Singapore",
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  tm_compass(type="8star", size = 2, bg.color = "white", bg.alpha = 0.5) +
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.5) +
+  tm_shape(hdb_sf) +
+  tm_dots(col = "red", size = 0.001, title = "HDB Blocks") +
+  tm_grid(alpha = 0.2)
+```
+
+### 7.2 **Adding *HDB_COUNT***
+
+This variable will contain the number of **HDB blocks** in a zone. We will use the same methods to count the number locations in the zone, by using `lengths()` and `st_intersects()`.
+
+We will use this as attractiveness variable, and will include all HDB block types (commercial, hawker, residential) as all of them are attractive destinations for eating out, meeting family/friends, and errands.
+
+```{r}
+st_crs(hdb_vars)
+st_crs(hdb_sf)
+hdb_sf <- st_transform(hdb_sf, st_crs(hdb_vars))
+hdb_vars <- st_transform(hdb_vars, st_crs(hdb_sf))
+hdb_vars$HDB_COUNT <- lengths(st_intersects(hdb_vars, hdb_sf))
+
+```
+
+```{r}
+hdb_vars$HDB_COUNT <- lengths(st_intersects(hdb_vars, hdb_sf))
+```
+
+```{r}
+attractiveness <- left_join(attractiveness,
+                            st_drop_geometry(hdb_vars))
+# Using head() to limit the number of rows
+kable(head(attractiveness))
+
+```
+
+#### **Removing unnecessary data**
+
+```{r}
+hdb_filtered_sf <- hdb_sf %>%
+  filter(residential == "Y") %>%
+  select(total_dwelling_units)
+```
+
+#### **Adding *HDB_DWELLING_COUNT***
+
+While `HDB_COUNT` can be a population proxy, we need to consider that HDB blocks have different sizes. For example, taller and wider blocks may have more units compared to shorter blocks, and therefore higher population.
+
+```{r}
+hdb_vars <- hdb_vars %>%
+  left_join(
+    st_intersection(hdb_filtered_sf, hdb_vars) %>%
+      st_drop_geometry() %>%
+      group_by(HEX_ID) %>%
+      summarise(HDB_RESIDENT_COUNT = sum(total_dwelling_units))
+  )
+kable(hdb_vars[160:165,])
+```
+
+```{r}
+write_rds(hdb_vars, "Take-home Exercise 2/data/rds/hdb_vars.rds")
+write_rds(attractiveness, "Take-home Exercise 2/data/rds/attractiveness.rds")
+```
+
+```{r}
+rm(hdb_csv)
+rm(hdb_sf)
+rm(hdb_filtered_sf)
+```
+
+## 8 **Propulsiveness variables**
+
+```{r}
+honeycomb <- read_rds("Take-home Exercise 2/data/rds/honeycomb.rds")
+hdb_vars <- read_rds("Take-home Exercise 2/data/rds/hdb_vars.rds")
+dest_bus_hex <- read_rds("Take-home Exercise 2/data/rds/dest_bus_hex202310.rds")
+```
+
+```{r}
+propulsiveness <- honeycomb
+```
+
+**HDB:**
+
+```{r}
+propulsiveness <- propulsiveness %>%
+  left_join(st_drop_geometry(hdb_vars)) %>%
+  select(HEX_ID, HDB_RESIDENT_COUNT)
+```
+
+BUS:
+
+```{r}
+propulsiveness <- propulsiveness %>%
+  left_join(st_drop_geometry(dest_bus_hex)) %>%
+  rename(BUS_ALIGHT_COUNT = TRIPS)
+```
+
+```{r}
+propulsiveness[is.na(propulsiveness)] <- 0
+kable(head(propulsiveness))
+```
+
+**Save point:**
+
+```{r}
+write_rds(propulsiveness, "Take-home Exercise 2/data/rds/propulsiveness202310.rds")
+```
+
+```{r}
+rm(dest_bus_hex)
+rm(hdb_vars)
+```
+
+## 9 **Generating distance table**
+
+```{r}
+honeycomb <- read_rds("Take-home Exercise 2/data/rds/honeycomb.rds")
+```
+
+Now that we have the attractive and propulsive forces, we can finally prepare the data for the **distance decay** component of the model.
+
+### **9.1Generating distance matrix**
+
+We will use `spDists()` to generate the matrix from our `honeycomb`, which requires a *Spatial* data frame. We also need to name the columns and rows to the corresponding `HEX_ID` of the hexagons.
+
+```{r}
+dist_mat <- spDists(as(honeycomb, "Spatial"),
+                    longlat = FALSE)
+colnames(dist_mat) <- paste0(honeycomb$HEX_ID)
+rownames(dist_mat) <- paste0(honeycomb$HEX_ID)
+kable(head(dist_mat, n=c(8, 8)))
+```
+
+### **9.2 Generating a pivot table**
+
+To generate data with the specifications we defined in [Data Outputs](https://isss624-kjcpaas.netlify.app/take-home_ex2/take-home_ex2#data-outputs), we must generate a pivot table from our distance matrix, `dist_mat`.
+
+We will use `melt()`, for this purpose and rename the columns to names we defined in our modelling data shape.
+
+```{r}
+dist_tbl <- melt(dist_mat) %>%
+  rename(DISTANCE = value) %>%
+  rename(ORIG_HEX_ID = Var1) %>%
+  rename(DEST_HEX_ID = Var2)
+kable(head(dist_tbl))
+```
+
+### 9.3 **Setting intra-zonal distances**
+
+```{r}
+dist_tbl$DISTANCE[dist_tbl$ORIG_HEX_ID == dist_tbl$DEST_HEX_ID] <- 200
+summary(dist_tbl$DISTANCE)
+```
+
+```{r}
+write_rds(dist_tbl, "Take-home Exercise 2/data/rds/dist_tbl.rds")
+```
+
+```{r}
+rm(dist_mat)
+```
+
+## 10 Four Sim
+
+**10.1 Generate SIM_data**
+
+```{r}
+honeycomb <- read_rds("Take-home Exercise 2/data/rds/honeycomb.rds")
+flowlines <- read_rds("Take-home Exercise 2/data/rds/flowlines202310.rds")
+dist_tbl <- read_rds("Take-home Exercise 2/data/rds/dist_tbl.rds")
+attractiveness <- read_rds("Take-home Exercise 2/data/rds/attractiveness.rds")
+propulsiveness <- read_rds("Take-home Exercise 2/data/rds/propulsiveness202310.rds")
+```
+
+Now that we have all the components, we will now generate the geospatial `data` that contains the following columns:
+
+-   `ORIG_HEX_ID`: ID corresponding to the origin zone
+
+-   `DEST_HEX_ID`: ID corresponding to the destination zone
+
+-   `DISTANCE`: Distance between the (centroids of) origin and destination zones
+
+-   `TRIPS`: Number of bus trips between the origin and destination zones
+
+-   `DEST_*_COUNT`: Values from \[Attractiveness Variables Table (attractiveness)\]
+
+-   `ORIG_*_COUNT`: Values from \[Propulsiveness Variables Table (propulsiveness)\]
+
+-   Geometry containing the flowlines
+
+We will join the tables to generate this data.
+
+**Flowlines:**
+
+```{r}
+kable(head(flowlines))
+```
+
+```{r}
+SIM_data <- flowlines
+```
+
+**Distance:**
+
+```{r}
+SIM_data <- SIM_data %>% left_join(dist_tbl)
+```
+
+**Propulsive:**
+
+```{r}
+SIM_data <- left_join(
+  SIM_data,
+  propulsiveness %>%
+    st_drop_geometry() %>%
+    rename_with(~paste("ORIG_", .x, sep = ""))
+  )
+```
+
+**Attractive:**
+
+```{r}
+SIM_data <- left_join(
+  SIM_data,
+  attractiveness %>%
+    st_drop_geometry() %>%
+    rename_with(~paste("DEST_", .x, sep = ""))
+  )
+```
+
+We can now clear the data that we have used for "SIM_data" from the environment.
+
+```{r}
+rm(attractiveness)
+rm(propulsiveness)
+rm(dist_tbl)
+rm(flowlines)
+```
+
+### 10.2 Visualize SIM_data
+
+```{r}
+summary(SIM_data)
+```
+
+Now we will make finishing touches on `SIM_data` , so that they are compatible with modeling. We need to remove the 0's as we will apply log function to them, which will result to undefined.
+
+Set them to 0.99.
+
+```{r}
+replace_zeroes <- function(data, col_name) {
+  data[[col_name]][data[[col_name]] == 0] <- 0.99
+  data
+}
+```
+
+```{r}
+summary(SIM_data)
+```
+
+**Save point:**
+
+```{r}
+write_rds(SIM_data, "Take-home Exercise 2/data/rds/SIM_data202310.rds")
+```
+
+```{r}
+rm(SIM_data)
+rm(replace_zeroes)
+```
+
+## 11 Visualize Spatial Interactions
+
+```{r}
+mpsz <- read_rds("Take-home Exercise 2/data/rds/mpsz.rds")
+honeycomb <- read_rds("Take-home Exercise 2/data/rds/honeycomb.rds")
+flowlines <- read_rds("Take-home Exercise 2/data/rds/flowlines202310.rds")
+SIM_data <- read_rds("Take-home Exercise 2/data/rds/SIM_data202310.rds")
+propulsiveness <- read_rds("Take-home Exercise 2/data/rds/propulsiveness202310.rds")
+attractiveness <- read_rds("Take-home Exercise 2/data/rds/attractiveness.rds")
+```
+
+### 11.1 Visualize flowlines
+
+```{r}
+flowlines_no_intra <- flowlines %>%
+  filter(ORIG_HEX_ID != DEST_HEX_ID)
+```
+
+```{r}
+quantile(flowlines_no_intra$TRIPS,
+         probs = c(0.8,0.9,0.95,0.99,1))
+```
+
+Let's take a look at the map.
+
+```{r}
+invalid_geoms <- which(!st_is_valid(mpsz))
+
+# If there are invalid geometries, fix them
+if(length(invalid_geoms) > 0) {
+  mpsz[invalid_geoms, ] <- st_make_valid(mpsz[invalid_geoms, ])
+}
+```
+
+```{r}
+tm_shape(mpsz) +
+  tm_polygons("grey", title = "Singapore Boundary", alpha = 0.5) +
+  
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white", title = "Hexagons", alpha = 1) +
+  
+  tm_shape(flowlines_no_intra %>% filter(TRIPS > 376)) +
+  tm_lines(lwd = "TRIPS",
+           style = "quantile",
+           col = "red",
+           scale = c(0.1, 1, 3, 5, 7),
+           title.lwd = "# of bus trips",
+           alpha = 0.8) +
+  
+  tm_layout(main.title = "Top 5% Bus Passenger flow for Weekends/Holidays 11 AM - 2PM (October 2023)",
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  
+  tm_compass(type="8star", size = 2, bg.color = "white", bg.alpha = 0.5) +
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.5) +
+  tm_grid(alpha = 0.2)
+```
+
+**Insights**
+
+It is notable that the thickest flow lines are for relatively short distances, like the bus rides to and from **Woodlands Checkpoint** to **Kranji Station**. We can notice these thick lines on busy zones where lines converge as well.
+
+Although not as thick, we can notice longer long lines on the map. This can indicate people more willing to travel longer distances over the weekend for recreation and meeting family and friends. This also means that a location being close by is not the only motivator for people to visit a place. Spatial interaction model can reveal more patterns to this.
+
+## 12 Plot Chart: TRIPS & DISTANCE
+
+```{r}
+ggplot(SIM_data,
+       aes(x = DISTANCE, y = TRIPS)) +
+  geom_point() +
+  geom_hline(yintercept = 376.25, color = "red", linetype = "dashed") +
+  annotate("text", x = 20000,
+           y = 600, label = "95th percentile",
+           hjust = -0.1, color = "red", size = 3) +
+  geom_hline(yintercept = 1510, color = "blue", linetype = "dashed") +
+  annotate("text", x = 20000,
+           y = 1800, label = "99th percentile",
+           hjust = -0.1, color = "blue", size = 3) +
+  labs(title = "Number of Trips as a Function of Distance",
+       x = "Distance (m)",
+       y = "Number of Trips")
+```
+
+Plotting it in a log scale shows a more linear relationship.
+
+```{r}
+ggplot(SIM_data,
+       aes(x = log(DISTANCE), y = log(TRIPS))) +
+  geom_point() +
+  geom_smooth(method = lm)
+```
+
+**Insights**
+
+The *maximum number of trips* **exponentially decrease** as the distance increases, which means that generally, the farther the distance, the less trips there are.
+
+However, some outliers can be observed like some zone pairs with almost 20km distance between them having close to 99th percentile of `TRIP` values. In these zone pairs, there could be strong propulsive or attractive forces attracting passengers to ride the bus between those zones.
+
+## 13 Visualize propulsive forces
+
+```{r}
+plot_propulsive <- function(var_name, title_comp) {
+  tm_shape(mpsz) +
+  tm_polygons("gray", title = "Singapore Boundary") +
+  
+  # Adding this layer underneath propulsiveness as we removed 0s. from the map
+  # so it won't skew the legend
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white") +
+  
+  tm_shape(propulsiveness %>% filter(if_any(var_name, ~. >= 1))) +
+  tm_polygons(var_name, palette = "Blues", style = "quantile") +
+    
+  tm_shape(flowlines_no_intra %>% filter(TRIPS > 376)) +
+  tm_lines(lwd = "TRIPS",
+           style = "quantile",
+           col = "orange",
+           scale = c(0.1, 1, 3, 5, 7, 10),
+           title.lwd = "# of bus trips",
+           n = 6,
+           alpha = 0.5) +
+  
+  tm_layout(main.title = paste("Top 5% Bus Passenger Flows and", title_comp),
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.7, position = c("right", "top")) +
+  tm_compass(type="8star", size = 2, bg.color = "white",
+             bg.alpha = 0.5, position = c("right", "top")) +
+  tm_grid(alpha = 0.2) +
+  tm_credits("*Passenger data from weekend/holidays 11AM - 2PM\n(October 2023)",
+             bg.color = "white", bg.alpha = 0.7,
+             position = c("left", "bottom"))
+}
+```
+
+### 13.1 HDB Residents
+
+```{r}
+plot_propulsive("HDB_RESIDENT_COUNT", "HDB POPULATION")
+```
+
+### 13.2 Transfer from BUS
+
+```{r}
+plot_propulsive("BUS_ALIGHT_COUNT", "Transfer by BUS")
+```
+
+**Insights**
+
+Upon visual inspection, HDB population and bus alights from zones correspond closely with our flowlines.
+
+## 14 Visualize attractive forces
+
+In this section, we plot attractive forces in their own choropleth maps to see if the top 5% flows correspond to areas we hypothesize have high attractive forces.
+
+```{r}
+plot_attractive <- function(var_name, title_comp) {
+  tm_shape(mpsz) +
+  tm_polygons("gray", title = "Singapore Boundary") +
+  
+  # Adding this layer underneath attractiveness as we removed 0s. from the map
+  # so it won't skew the legend
+  tm_shape(honeycomb) +
+  tm_polygons(col = "white") +
+  
+  tm_shape(attractiveness %>% filter(if_any(var_name, ~. >= 1))) +
+  tm_polygons(var_name, palette = "Purples", style = "quantile") +
+    
+  tm_shape(flowlines_no_intra %>% filter(TRIPS > 376)) +
+  tm_lines(lwd = "TRIPS",
+           style = "quantile",
+           col = "red",
+           scale = c(0.1, 1, 3, 5, 7, 10),
+           title.lwd = "# of bus trips",
+           n = 6,
+           alpha = 0.5) +
+  
+  tm_layout(main.title = paste("Top 5% Bus Passenger Flows and", title_comp),
+            main.title.position = "center",
+            main.title.size = 1.0,
+            legend.height = 0.35, 
+            legend.width = 0.35,
+            frame = TRUE) +
+  
+  tm_scale_bar(bg.color = "white", bg.alpha = 0.7, position = c("right", "top")) +
+  tm_compass(type="8star", size = 2, bg.color = "white",
+             bg.alpha = 0.5, position = c("right", "top")) +
+  tm_grid(alpha = 0.2) +
+  tm_credits("*Passenger data from weekend/holidays 11AM - 2PM\n(October 2023)",
+             bg.color = "white", bg.alpha = 0.7,
+             position = c("left", "bottom"))
+}
+```
+
+### 14.1 Busstops
+
+```{r}
+plot_attractive("BUS_STOP_COUNT", "Number of Busstops")
+```
+
+### 14.2 HDB
+
+```{r}
+plot_attractive("HDB_COUNT", "Number of HDB")
+```
+
+### 14.3 Entertainment
+
+```{r}
+plot_attractive("ENTERTN_COUNT", "Number of Entertainment Items")
+```
+
+### 14.4 F&B
+
+```{r}
+plot_attractive("F_AND_B_COUNT", "Number of F&B Outlets")
+```
+
+### 14.5 Leisure&Recreation
+
+```{r}
+plot_attractive("LEISURE_COUNT", "Number of Leisure&Recreation Items")
+```
+
+### 14.6 Retail
+
+```{r}
+plot_attractive("RETAIL_COUNT", "Number of Retail")
+```
+
+**\
+Insights**
+
+There are less location types than the others, like entertainment and leisure locations.
+
+There are also location types that are heavily concentrated in some zones, like the entertainment and F&B, which are heavily concentrated around the **Orchard area**. Conversely, there are much less HDBs in Orchard area. Even though the flowlines are not thick in this area, there are many flowlines, although thin. This means people are coming from various parts of Singapore.
+
+**Save point**
+
+```{r}
+write_rds(flowlines_no_intra, "Take-home Exercise 2/data/rds/flowines_no_intra202310.rds")
+```
+
+```{r}
+rm(flowlines)
+rm(attractiveness)
+rm(propulsiveness)
+rm(plot_attractive)
+rm(plot_propulsive)
+```

@@ -23,14 +23,18 @@ website:
             href: In_class_Ex2_EHSA.html
           - text: In-class Exercise 3
             href: In-class_Ex3.html
-          - text: In-class Exercise 4
+          - text: In-class Exercise 4 URA
             href: In_class_Ex4.html
+          - text: In-class Exercise 4 CIS
+            href: In_class_Ex4_CIS.html
+          - text: In-class Exercise 5
+            href: In-class_Ex5.html
       - text: Take-home Exercise
         menu: 
           - text: Take-home Exercise 1
             href: Take_home_Ex1.html
           - text: Take-home Exercise 2
-            href: Take_home_Ex2.html
+            href: Take-home-Ex2.html
     right:
       - href: index.qmd
         text: Home
